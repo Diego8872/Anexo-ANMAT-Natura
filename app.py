@@ -571,7 +571,8 @@ if 'datos_avon_completados' not in st.session_state:
 # ─────────────────────────────────────────
 st.markdown('<div class="card"><h3><span class="step-badge">1</span>Archivos de la operación</h3>', unsafe_allow_html=True)
 
-nro_referencia = st.text_input("Número de referencia de la operación", placeholder="ej: 4550595912")
+st.markdown('<p style="color:#ffffff; font-weight:600; font-size:1rem; margin-bottom:4px;">Número de referencia de la operación</p>', unsafe_allow_html=True)
+nro_referencia = st.text_input("", placeholder="ej: 4550595912", label_visibility="collapsed")
 
 col1, col2 = st.columns(2)
 with col1:
