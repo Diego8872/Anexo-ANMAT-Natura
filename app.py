@@ -28,16 +28,16 @@ st.markdown("""
     
     html, body, [class*="css"] { font-family: 'Roboto', sans-serif; }
     
-    /* Labels y textos generales */
-    label, p, span { color: #e0e6f0 !important; }
-    .stFileUploader > label > div { color: #ffffff !important; font-weight: 600 !important; font-size: 1rem !important; }
-    [data-testid="stFileUploaderDropzoneInstructions"] span { color: #8b9ab0 !important; }
-    [data-testid="stFileUploaderDropzone"] { background: #1a1d27 !important; border-color: #2a2d3a !important; }
-    .stMarkdown p { color: #e0e6f0 !important; }
-    .streamlit-expanderHeader p { color: #e0e6f0 !important; }
-    /* inputs */
-    .stTextInput label { color: #e0e6f0 !important; font-weight: 500 !important; }
-    .stTextInput input { background: #1a1d27 !important; color: #e0e6f0 !important; border-color: #2a2d3a !important; }
+    /* Forzar todos los textos a color visible */
+    .stApp, .stApp * { color: #e0e6f0; }
+    .stMarkdown, .stMarkdown p, .stMarkdown span { color: #e0e6f0 !important; }
+    div[data-testid="stFileUploaderLabel"], 
+    div[data-testid="stFileUploaderLabel"] p,
+    div[data-testid="stFileUploaderLabel"] span { color: #e0e6f0 !important; font-weight: 600 !important; }
+    div[data-testid="stFileUploaderDropzoneInstructions"] span { color: #8b9ab0 !important; }
+    .stTextInput input { color: #e0e6f0 !important; background: #1a1d27 !important; }
+    .stTextInput label, .stTextInput label p { color: #e0e6f0 !important; }
+    p[style*="color:#000000"] { color: #e0e6f0 !important; }
     
     .main { background-color: #0f1117; }
     
@@ -571,7 +571,7 @@ if 'datos_avon_completados' not in st.session_state:
 # ─────────────────────────────────────────
 st.markdown('<div class="card"><h3><span class="step-badge">1</span>Archivos de la operación</h3>', unsafe_allow_html=True)
 
-st.markdown('<p style="color:#000000; font-weight:600; font-size:1rem; margin-bottom:4px;">Número de referencia de la operación</p>', unsafe_allow_html=True)
+st.markdown('<p style="color:#e0e6f0 !important; font-weight:600; font-size:1rem; margin-bottom:4px; text-shadow: 0 0 2px #000;">📌 Número de referencia de la operación</p>', unsafe_allow_html=True)
 nro_referencia = st.text_input("", placeholder="ej: 4550595912", label_visibility="collapsed")
 
 col1, col2 = st.columns(2)
