@@ -551,21 +551,36 @@ def excel_a_pdf_bytes(excel_bytes, nombre_base):
         if not data:
             return None
 
-        # Calcular anchos proporcionales
+        # Anchos proporcionales por columna (landscape A4 = ~27.7cm util)
+        ancho_total = landscape(A4)[0] - 1.6*cm
+        # Pesos relativos por posicion de columna en COLUMNAS_SIN_PRIMERAS
+        # Marca y Nombre | Variedades | Presentacion | Cantidad | N inscripcion | Lote | Fecha venc | Origen | Fabricante | NCM
+        pesos = [4.5, 2.0, 1.2, 0.9, 2.2, 1.0, 1.5, 1.2, 3.5, 2.0]
         n_cols = len(data[0])
-        col_width = (landscape(A4)[0] - 1.6*cm) / n_cols
+        if n_cols == len(pesos):
+            total_pesos = sum(pesos)
+            col_widths = [ancho_total * p / total_pesos for p in pesos]
+        else:
+            col_widths = [ancho_total / n_cols] * n_cols
 
-        table = Table(data, colWidths=[col_width]*n_cols, repeatRows=2)
+        table = Table(data, colWidths=col_widths, repeatRows=2)
         table.setStyle(TableStyle([
             ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#D9D9D9')),
             ('BACKGROUND', (0,1), (-1,1), colors.HexColor('#70AD47')),
             ('TEXTCOLOR', (0,1), (-1,1), colors.white),
             ('FONTNAME', (0,0), (-1,1), 'Helvetica-Bold'),
-            ('FONTSIZE', (0,0), (-1,-1), 7),
-            ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+            ('FONTSIZE', (0,0), (-1,0), 7),
+            ('FONTSIZE', (0,1), (-1,1), 7),
+            ('FONTSIZE', (0,2), (-1,-1), 7),
+            ('ALIGN', (0,0), (-1,-1), 'LEFT'),
+            ('ALIGN', (0,0), (-1,1), 'CENTER'),
             ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
             ('GRID', (0,0), (-1,-1), 0.3, colors.HexColor('#CCCCCC')),
             ('ROWBACKGROUNDS', (0,2), (-1,-1), [colors.white, colors.HexColor('#F5F5F5')]),
+            ('LEFTPADDING', (0,0), (-1,-1), 3),
+            ('RIGHTPADDING', (0,0), (-1,-1), 3),
+            ('TOPPADDING', (0,0), (-1,-1), 3),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 3),
             ('WORDWRAP', (0,0), (-1,-1), True),
         ]))
         doc.build([table])
@@ -736,14 +751,16 @@ if st.session_state.filas_procesadas is not None:
         for item in st.session_state.alertas_avon:
             mat = item['material']
             st.markdown(f'<div class="alert-box"><strong>{mat}</strong> — {item["descripcion"]}</div>', unsafe_allow_html=True)
-            c1, c2 = st.columns(2)
             prev = st.session_state.datos_avon_completados.get(mat, {})
+            c1, c2, c3 = st.columns(3)
             with c1:
                 fab_val = st.text_input("Fabricante", value=prev.get('fabricante', ''), key=f'fab_{mat}')
             with c2:
                 orig_val = st.text_input("Origen", value=prev.get('origen', ''), key=f'orig_{mat}')
-            if fab_val or orig_val:
-                st.session_state.datos_avon_completados[mat] = {'fabricante': fab_val, 'origen': orig_val}
+            with c3:
+                var_val = st.text_input("Variedad", value=prev.get('variedad', ''), key=f'var_{mat}')
+            if fab_val or orig_val or var_val:
+                st.session_state.datos_avon_completados[mat] = {'fabricante': fab_val, 'origen': orig_val, 'variedad': var_val}
         st.markdown('</div>', unsafe_allow_html=True)
 
     # ── Alertas generales ──
@@ -775,6 +792,8 @@ if st.session_state.filas_procesadas is not None:
                         f['Fabricante'] = datos['fabricante']
                     if datos.get('origen'):
                         f['Origen'] = datos['origen']
+                    if datos.get('variedad'):
+                        f['Variedades'] = datos['variedad']
                 filas_final.append(f)
 
             principal, difusor, kit3x1, _ = separar_anexos(filas_final)
