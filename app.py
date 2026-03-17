@@ -216,6 +216,61 @@ def verificar_origen_proximas(origen_anmat, mat_code, df_prox):
         return None, f"Origen no coincide para {mat_code}: ANMAT='{origen_anmat}' vs ProxImp='{origen_prox}'"
     return origen_prox, None
 
+
+from datetime import datetime, timedelta
+
+SEPARADORES_REGISTRO = [' - ', ' / ', ' | ', '\n', '; ']
+
+def separar_registros(registro_str):
+    """Detecta si hay múltiples N° de inscripción y los separa."""
+    if not registro_str or registro_str == 'nan':
+        return [registro_str]
+    s = str(registro_str).strip()
+    for sep in SEPARADORES_REGISTRO:
+        if sep in s:
+            partes = [p.strip() for p in s.split(sep) if p.strip()]
+            if len(partes) > 1:
+                return partes
+    return [s]
+
+def buscar_por_registro(nro_registro, df_anmat):
+    """Busca en ANMAT por número de registro exacto en columna Registros ANMAT."""
+    nro = str(nro_registro).strip()
+    found = df_anmat[df_anmat['Registros ANMAT'].astype(str).str.strip() == nro]
+    if len(found) == 0:
+        return None, f"⚠️ Registro {nro} no encontrado en ANMAT Histórico"
+    if len(found) > 1:
+        return None, f"⚠️ Registro {nro} aparece más de una vez en ANMAT Histórico"
+    return found.iloc[0], None
+
+def parsear_fecha_vencimiento(expire_str):
+    """Convierte MM/YYYY a datetime."""
+    try:
+        if not expire_str or expire_str == 'nan':
+            return None
+        partes = str(expire_str).strip().split('/')
+        if len(partes) == 2:
+            mes, anio = int(partes[0]), int(partes[1])
+            return datetime(anio, mes, 1)
+        return None
+    except:
+        return None
+
+def verificar_vencimiento(expire_str):
+    """
+    Retorna: ('ok', None) | ('vencido', msg) | ('proximo', msg)
+    """
+    fecha = parsear_fecha_vencimiento(expire_str)
+    if fecha is None:
+        return 'ok', None
+    hoy = datetime.now()
+    limite_90 = hoy + timedelta(days=90)
+    if fecha < hoy:
+        return 'vencido', f"⚠️ VENCIDO: {expire_str}"
+    if fecha <= limite_90:
+        return 'proximo', f"⚠️ Vence próximo en 90 días: {expire_str}"
+    return 'ok', None
+
 def procesar_pl(pl, df_anmat, df_avon, df_prox, df_fab, df_ncm):
     filas = []
     alertas_excluir = []   # no encontrados en ANMAT ni Avon
@@ -246,7 +301,17 @@ def procesar_pl(pl, df_anmat, df_avon, df_prox, df_fab, df_ncm):
             '_skip': False,
             '_avon': False,
             '_necesita_completar': False,
+            '_vencimiento': None,
+            '_multi_registro': False,
+            '_expanded': False,
         }
+
+        # ── Verificar vencimiento ──
+        estado_venc, msg_venc = verificar_vencimiento(expire_date)
+        if msg_venc:
+            fila['_vencimiento'] = estado_venc
+            fila['_alertas'].append(msg_venc)
+            alertas_generales.append(f"{mat_code} — {msg_venc}")
 
         anmat_row = buscar_anmat(mat_code, df_anmat)
 
@@ -260,10 +325,6 @@ def procesar_pl(pl, df_anmat, df_avon, df_prox, df_fab, df_ncm):
             if 'REFIL' in descripcion_pl.upper():
                 nombre = nombre + ' (REPUESTO)'
 
-            fila['Marca y Nombre del producto'] = nombre
-            fila['Variedades'] = variedad if variedad != 'nan' else ''
-            fila['Presentación'] = contenido if contenido != 'nan' else ''
-            fila['N° de inscripcion'] = registro if registro != 'nan' else ''
             fila['Origen'] = normalizar_pais(origen).capitalize() if origen != 'nan' else ''
 
             _, alerta_origen = verificar_origen_proximas(origen, mat_code, df_prox)
@@ -277,6 +338,65 @@ def procesar_pl(pl, df_anmat, df_avon, df_prox, df_fab, df_ncm):
                 alertas_generales.append(alerta_fab)
             else:
                 fila['Fabricante'] = fab
+
+            # ── Múltiples registros ──
+            registros = separar_registros(registro)
+            if len(registros) <= 1:
+                # Fila simple
+                fila['Marca y Nombre del producto'] = nombre
+                fila['Variedades'] = variedad if variedad != 'nan' else ''
+                fila['Presentación'] = contenido if contenido != 'nan' else ''
+                fila['N° de inscripcion'] = registro if registro != 'nan' else ''
+            else:
+                # Fila principal con todos los registros
+                fila['Marca y Nombre del producto'] = nombre
+                fila['Variedades'] = variedad if variedad != 'nan' else ''
+                fila['Presentación'] = contenido if contenido != 'nan' else ''
+                fila['N° de inscripcion'] = registro if registro != 'nan' else ''
+                fila['_multi_registro'] = True
+                filas.append(fila)
+                # Filas expandidas por cada registro individual
+                for nro in registros:
+                    anmat_nro, alerta_nro = buscar_por_registro(nro, df_anmat)
+                    fila_exp = {
+                        'MATERIAL': '',
+                        'descripcion_factura': '',
+                        'Marca y Nombre del producto': '',
+                        'Variedades': '',
+                        'Presentación': '',
+                        'Cantidad': '',
+                        'N° de inscripcion': nro,
+                        'Lote': '',
+                        'Fecha de vencimiento': '',
+                        'Origen': '',
+                        'Fabricante': '',
+                        'Posición Arancelaria': '',
+                        '_alertas': [],
+                        '_skip': False,
+                        '_avon': False,
+                        '_necesita_completar': False,
+                        '_expanded': True,
+                    }
+                    if alerta_nro:
+                        fila_exp['_alertas'].append(alerta_nro)
+                        alertas_generales.append(alerta_nro)
+                    else:
+                        n = str(anmat_nro['NOMBRE']) if pd.notna(anmat_nro['NOMBRE']) else ''
+                        v = str(anmat_nro['Variedad']) if pd.notna(anmat_nro['Variedad']) else ''
+                        c = str(anmat_nro['CONTENIDO NETO']) if pd.notna(anmat_nro['CONTENIDO NETO']) else ''
+                        if 'REFIL' in descripcion_pl.upper():
+                            n = n + ' (REPUESTO)'
+                        fila_exp['Marca y Nombre del producto'] = n
+                        fila_exp['Variedades'] = v if v != 'nan' else ''
+                        fila_exp['Presentación'] = c if c != 'nan' else ''
+                    filas.append(fila_exp)
+                # Saltar el append al final del loop
+                ncm, alerta_ncm = buscar_ncm(mat_code, df_ncm)
+                if alerta_ncm:
+                    alertas_generales.append(alerta_ncm)
+                else:
+                    filas[-len(registros)-1]['Posición Arancelaria'] = ncm
+                continue
 
         else:
             avon_row = buscar_avon(mat_code, df_avon)
@@ -382,6 +502,12 @@ def escribir_excel_bytes(filas, incluir_primeras_cols=True):
         tiene_alerta = len(fila.get('_alertas', [])) > 0 or fila.get('_necesita_completar', False)
         for col_idx, col_name in enumerate(columnas, 1):
             val = fila.get(col_name, '')
+            # MATERIAL y Cantidad como número
+            if col_name in ('MATERIAL', 'Cantidad') and val != '':
+                try:
+                    val = int(float(str(val)))
+                except:
+                    pass
             cell = ws.cell(row=row_idx, column=col_idx, value=val)
             cell.font = Font(name='Calibri', size=11)
             cell.alignment = Alignment(vertical='center', wrap_text=True)
@@ -538,6 +664,28 @@ if st.session_state.filas_procesadas is not None:
 
     st.markdown('<br>', unsafe_allow_html=True)
 
+    # ── Alertas: vencimientos ──
+    alertas_venc = [f for f in st.session_state.filas_procesadas if f.get('_vencimiento') in ('vencido', 'proximo') and not f['_skip']]
+    if alertas_venc:
+        st.markdown('<div class="card"><h3>⏰ Alertas de vencimiento</h3>', unsafe_allow_html=True)
+        for fila in alertas_venc:
+            tipo = fila.get('_vencimiento')
+            color = '#cc0000' if tipo == 'vencido' else '#cc7700'
+            icono = '🔴' if tipo == 'vencido' else '🟡'
+            msg = [a for a in fila['_alertas'] if 'venc' in a.lower() or 'Venc' in a]
+            msg_str = msg[0] if msg else ''
+            key_excl = f'venc_{fila["MATERIAL"]}_{fila["Lote"]}'
+            excluido = key_excl in st.session_state.excluidos
+            col1, col2 = st.columns([4, 1])
+            with col1:
+                st.markdown(f'<div class="alert-box" style="border-color:{color}; color:{color};">{icono} <strong>{fila["MATERIAL"]}</strong> — Lote {fila["Lote"]} — {msg_str}</div>', unsafe_allow_html=True)
+            with col2:
+                label = "✅ Excluido" if excluido else "Excluir"
+                if st.button(label, key=f'btn_{key_excl}'):
+                    st.session_state.excluidos.add(key_excl)
+                    st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
+
     # ── Alertas: no encontrados en ANMAT ni Avon ──
     if st.session_state.alertas_excluir:
         st.markdown('<div class="card"><h3>⚠️ No encontrados en ANMAT ni Avon — ¿excluir del anexo?</h3>', unsafe_allow_html=True)
@@ -586,7 +734,10 @@ if st.session_state.filas_procesadas is not None:
             filas_final = []
             for fila in filas:
                 mat = fila['MATERIAL']
+                key_venc = f'{mat}_{fila.get("Lote","")}'
                 if mat in st.session_state.excluidos:
+                    continue
+                if f'venc_{key_venc}' in st.session_state.excluidos:
                     continue
                 f = fila.copy()
                 if fila.get('_avon') and mat in st.session_state.datos_avon_completados:
