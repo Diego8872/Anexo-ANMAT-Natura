@@ -42,6 +42,9 @@ st.markdown("""
     .stat-card .number { color: #00b4d8; font-size: 2rem; font-weight: 700; line-height: 1; }
     .stat-card .label { color: #888; font-size: 0.78rem; margin-top: 4px; text-transform: uppercase; letter-spacing: 0.05em; }
     .step-badge { display: inline-block; background: #00b4d8; color: #ffffff; border-radius: 50%; width: 22px; height: 22px; text-align: center; line-height: 22px; font-weight: 700; font-size: 0.78rem; margin-right: 8px; }
+    [data-testid="stToolbar"] { visibility: hidden !important; }
+    [data-testid="stDecoration"] { display: none !important; }
+    a[href*="github.com"] { display: none !important; }
 </style>
 """, unsafe_allow_html=True)
 
