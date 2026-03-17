@@ -42,115 +42,85 @@ st.markdown("""
     .main { background-color: #0f1117; }
     
     .header-box {
-        background: linear-gradient(135deg, #0f1117 0%, #1a1d27 100%);
-        border: 1px solid #00b4d8;
-        border-radius: 12px;
-        padding: 24px 32px;
+        background: linear-gradient(135deg, #e8f4f8 0%, #d0eaf5 100%);
+        border-left: 5px solid #00b4d8;
+        border-radius: 8px;
+        padding: 20px 28px;
         margin-bottom: 24px;
     }
-    .header-box h1 {
-        color: #00b4d8;
-        font-size: 1.8rem;
-        font-weight: 700;
-        margin: 0 0 4px 0;
-    }
-    .header-box p {
-        color: #8b9ab0;
-        font-size: 0.9rem;
-        margin: 0;
-    }
-    
+    .header-box h1 { color: #00b4d8; font-size: 1.6rem; font-weight: 700; margin: 0 0 4px 0; }
+    .header-box p { color: #555; font-size: 0.9rem; margin: 0; }
+
     .card {
-        background: #1a1d27;
-        border: 1px solid #2a2d3a;
-        border-radius: 10px;
+        background: #ffffff;
+        border: 1px solid #dde3ea;
+        border-radius: 8px;
         padding: 20px;
         margin-bottom: 16px;
+        box-shadow: 0 1px 4px rgba(0,0,0,0.06);
     }
     .card h3 {
         color: #00b4d8;
-        font-size: 0.95rem;
-        font-weight: 600;
-        margin: 0 0 12px 0;
+        font-size: 0.9rem;
+        font-weight: 700;
+        margin: 0 0 14px 0;
         text-transform: uppercase;
-        letter-spacing: 0.05em;
+        letter-spacing: 0.06em;
     }
-    
+
     .alert-box {
-        background: #2a1f1f;
-        border: 1px solid #ff6b6b;
-        border-radius: 8px;
-        padding: 16px;
-        margin: 8px 0;
-        color: #ff6b6b;
+        background: #fff5f5;
+        border: 1px solid #ffb3b3;
+        border-radius: 6px;
+        padding: 12px 16px;
+        margin: 6px 0;
+        color: #cc0000;
         font-size: 0.9rem;
     }
-    .alert-box strong { color: #ff9999; }
-    
+    .alert-box strong { color: #990000; }
+
     .success-box {
-        background: #1a2a1f;
+        background: #f0fff8;
         border: 1px solid #00c896;
-        border-radius: 8px;
-        padding: 16px;
-        margin: 8px 0;
-        color: #00c896;
+        border-radius: 6px;
+        padding: 12px 16px;
+        margin: 6px 0;
+        color: #007a5c;
         font-size: 0.9rem;
     }
-    
+
     .stat-card {
-        background: #1a1d27;
-        border: 1px solid #2a2d3a;
+        background: #ffffff;
+        border: 1px solid #dde3ea;
         border-radius: 8px;
         padding: 16px;
         text-align: center;
+        box-shadow: 0 1px 4px rgba(0,0,0,0.05);
     }
-    .stat-card .number {
-        color: #00b4d8;
-        font-size: 2rem;
-        font-weight: 700;
-        line-height: 1;
-    }
-    .stat-card .label {
-        color: #8b9ab0;
-        font-size: 0.8rem;
-        margin-top: 4px;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-    }
-    
+    .stat-card .number { color: #00b4d8; font-size: 2rem; font-weight: 700; line-height: 1; }
+    .stat-card .label { color: #888; font-size: 0.78rem; margin-top: 4px; text-transform: uppercase; letter-spacing: 0.05em; }
+
     .step-badge {
         display: inline-block;
         background: #00b4d8;
-        color: #0f1117;
+        color: #ffffff;
         border-radius: 50%;
-        width: 24px;
-        height: 24px;
-        text-align: center;
-        line-height: 24px;
-        font-weight: 700;
-        font-size: 0.8rem;
+        width: 22px; height: 22px;
+        text-align: center; line-height: 22px;
+        font-weight: 700; font-size: 0.78rem;
         margin-right: 8px;
     }
 
-    div[data-testid="stFileUploader"] {
-        background: #1a1d27;
-        border: 1px dashed #2a2d3a;
-        border-radius: 8px;
-        padding: 8px;
-    }
-    
     div[data-testid="stButton"] > button {
         background: #00b4d8;
-        color: #0f1117;
+        color: #ffffff;
         font-weight: 700;
         border: none;
-        border-radius: 8px;
+        border-radius: 6px;
         padding: 10px 24px;
         width: 100%;
     }
-    div[data-testid="stButton"] > button:hover {
-        background: #0090b0;
-    }
+    div[data-testid="stButton"] > button:hover { background: #0090b0; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -571,7 +541,7 @@ if 'datos_avon_completados' not in st.session_state:
 # ─────────────────────────────────────────
 st.markdown('<div class="card"><h3><span class="step-badge">1</span>Archivos de la operación</h3>', unsafe_allow_html=True)
 
-st.markdown('<p style="color:#e0e6f0 !important; font-weight:600; font-size:1rem; margin-bottom:4px; text-shadow: 0 0 2px #000;">📌 Número de referencia de la operación</p>', unsafe_allow_html=True)
+st.markdown('<p style="color:#333333; font-weight:600; font-size:0.95rem; margin-bottom:4px;">📌 Número de referencia de la operación</p>', unsafe_allow_html=True)
 nro_referencia = st.text_input("", placeholder="ej: 4550595912", label_visibility="collapsed")
 
 col1, col2 = st.columns(2)
