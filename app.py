@@ -8,7 +8,7 @@ import subprocess
 import tempfile
 import zipfile
 from io import BytesIO
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.page import PageMargins
@@ -78,15 +78,12 @@ def normalizar_pais(origen_str):
 
 @st.cache_data
 def cargar_anmat(file_bytes):
-    with tempfile.NamedTemporaryFile(suffix='.xlsb', delete=False) as f:
-        f.write(file_bytes)
-        tmp = f.name
-    out = tmp.replace('.xlsb', '.xlsx')
-    subprocess.run(['libreoffice', '--headless', '--convert-to', 'xlsx', tmp, '--outdir', os.path.dirname(tmp)], capture_output=True)
-    if os.path.exists(out):
-        df = pd.read_excel(out, sheet_name='HISTORICO', header=0)
-    else:
-        df = pd.read_excel(tmp, sheet_name='HISTORICO', header=0)
+    buf = BytesIO(file_bytes)
+    try:
+        df = pd.read_excel(buf, sheet_name='HISTORICO', header=0, engine='pyxlsb')
+    except:
+        buf.seek(0)
+        df = pd.read_excel(buf, sheet_name='HISTORICO', header=0)
     df['CM'] = df['CM'].astype(str).str.strip()
     return df
 
@@ -99,14 +96,11 @@ def cargar_avon(file_bytes):
 
 @st.cache_data
 def cargar_fabricantes(file_bytes, suffix='.xlsx'):
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as f:
-        f.write(file_bytes)
-        tmp = f.name
+    buf = BytesIO(file_bytes)
     if suffix == '.xls':
-        out = tmp.replace('.xls', '.xlsx')
-        subprocess.run(['libreoffice', '--headless', '--convert-to', 'xlsx', tmp, '--outdir', os.path.dirname(tmp)], capture_output=True)
-        tmp = out
-    df = pd.read_excel(tmp, header=1)
+        df = pd.read_excel(buf, header=1, engine='xlrd')
+    else:
+        df = pd.read_excel(buf, header=1)
     df.columns = ['material', 'En Historico', 'Corresponde']
     return df
 
@@ -533,17 +527,52 @@ def escribir_excel_bytes(filas, incluir_primeras_cols=True):
     return buf.getvalue()
 
 def excel_a_pdf_bytes(excel_bytes, nombre_base):
-    with tempfile.TemporaryDirectory() as tmpdir:
-        xlsx_path = os.path.join(tmpdir, f'{nombre_base}.xlsx')
-        with open(xlsx_path, 'wb') as f:
-            f.write(excel_bytes)
-        subprocess.run(['libreoffice', '--headless', '--convert-to', 'pdf',
-                        '--outdir', tmpdir, xlsx_path], capture_output=True)
-        pdf_path = os.path.join(tmpdir, f'{nombre_base}.pdf')
-        if os.path.exists(pdf_path):
-            with open(pdf_path, 'rb') as f:
-                return f.read()
-    return None
+    """Convierte Excel a PDF usando openpyxl + reportlab."""
+    try:
+        from reportlab.lib.pagesizes import A4, landscape
+        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
+        from reportlab.lib.styles import getSampleStyleSheet
+        from reportlab.lib import colors
+        from reportlab.lib.units import cm
+
+        # Leer datos del excel
+        wb = load_workbook(BytesIO(excel_bytes))
+        ws = wb.active
+        data = []
+        for row in ws.iter_rows(values_only=True):
+            data.append([str(v) if v is not None else '' for v in row])
+
+        buf = BytesIO()
+        doc = SimpleDocTemplate(buf, pagesize=landscape(A4),
+                                leftMargin=0.8*cm, rightMargin=0.8*cm,
+                                topMargin=1*cm, bottomMargin=1*cm)
+        styles = getSampleStyleSheet()
+
+        if not data:
+            return None
+
+        # Calcular anchos proporcionales
+        n_cols = len(data[0])
+        col_width = (landscape(A4)[0] - 1.6*cm) / n_cols
+
+        table = Table(data, colWidths=[col_width]*n_cols, repeatRows=2)
+        table.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#D9D9D9')),
+            ('BACKGROUND', (0,1), (-1,1), colors.HexColor('#70AD47')),
+            ('TEXTCOLOR', (0,1), (-1,1), colors.white),
+            ('FONTNAME', (0,0), (-1,1), 'Helvetica-Bold'),
+            ('FONTSIZE', (0,0), (-1,-1), 7),
+            ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+            ('GRID', (0,0), (-1,-1), 0.3, colors.HexColor('#CCCCCC')),
+            ('ROWBACKGROUNDS', (0,2), (-1,-1), [colors.white, colors.HexColor('#F5F5F5')]),
+            ('WORDWRAP', (0,0), (-1,-1), True),
+        ]))
+        doc.build([table])
+        buf.seek(0)
+        return buf.getvalue()
+    except Exception as e:
+        return None
 
 def generar_zip(grupos, invoice):
     buf = BytesIO()
