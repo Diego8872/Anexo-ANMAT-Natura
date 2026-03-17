@@ -28,6 +28,17 @@ st.markdown("""
     
     html, body, [class*="css"] { font-family: 'Roboto', sans-serif; }
     
+    /* Labels y textos generales */
+    label, p, span { color: #e0e6f0 !important; }
+    .stFileUploader > label > div { color: #ffffff !important; font-weight: 600 !important; font-size: 1rem !important; }
+    [data-testid="stFileUploaderDropzoneInstructions"] span { color: #8b9ab0 !important; }
+    [data-testid="stFileUploaderDropzone"] { background: #1a1d27 !important; border-color: #2a2d3a !important; }
+    .stMarkdown p { color: #e0e6f0 !important; }
+    .streamlit-expanderHeader p { color: #e0e6f0 !important; }
+    /* inputs */
+    .stTextInput label { color: #e0e6f0 !important; font-weight: 500 !important; }
+    .stTextInput input { background: #1a1d27 !important; color: #e0e6f0 !important; border-color: #2a2d3a !important; }
+    
     .main { background-color: #0f1117; }
     
     .header-box {
@@ -560,6 +571,8 @@ if 'datos_avon_completados' not in st.session_state:
 # ─────────────────────────────────────────
 st.markdown('<div class="card"><h3><span class="step-badge">1</span>Archivos de la operación</h3>', unsafe_allow_html=True)
 
+nro_referencia = st.text_input("Número de referencia de la operación", placeholder="ej: 4550595912")
+
 col1, col2 = st.columns(2)
 with col1:
     f_pl = st.file_uploader("📦 Packing List", type=['xlsx'], key='pl')
@@ -694,7 +707,8 @@ if st.session_state.filas_procesadas is not None:
 
             principal, difusor, kit3x1, _ = separar_anexos(filas_final)
             grupos = [('PRINCIPAL', principal), ('DIFUSOR', difusor), ('3x1', kit3x1)]
-            zip_bytes = generar_zip(grupos, invoice)
+            ref = nro_referencia.strip() if nro_referencia.strip() else invoice
+            zip_bytes = generar_zip(grupos, ref)
 
             st.markdown('<div class="success-box">✅ Anexo generado correctamente</div>', unsafe_allow_html=True)
 
@@ -707,7 +721,7 @@ if st.session_state.filas_procesadas is not None:
             st.download_button(
                 label="⬇️ Descargar todos los archivos (ZIP)",
                 data=zip_bytes,
-                file_name=f"ANEXO_{invoice}.zip",
+                file_name=f"ANEXO_{ref}.zip",
                 mime="application/zip",
                 key='dl_zip'
             )
