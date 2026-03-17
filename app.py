@@ -540,61 +540,72 @@ def escribir_excel_bytes(filas, incluir_primeras_cols=True):
     return buf.getvalue()
 
 def excel_a_pdf_bytes(excel_bytes, nombre_base):
-    """Convierte Excel a PDF usando openpyxl + reportlab."""
+    """Convierte Excel a PDF usando reportlab con Paragraph para wrap de texto."""
     try:
         from reportlab.lib.pagesizes import A4, landscape
         from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
-        from reportlab.lib.styles import getSampleStyleSheet
+        from reportlab.lib.styles import ParagraphStyle
         from reportlab.lib import colors
         from reportlab.lib.units import cm
+        from reportlab.lib.enums import TA_CENTER, TA_LEFT
 
-        # Leer datos del excel
         wb = load_workbook(BytesIO(excel_bytes))
         ws = wb.active
-        data = []
-        for row in ws.iter_rows(values_only=True):
-            data.append([str(v) if v is not None else '' for v in row])
 
-        buf = BytesIO()
-        doc = SimpleDocTemplate(buf, pagesize=landscape(A4),
-                                leftMargin=0.8*cm, rightMargin=0.8*cm,
-                                topMargin=1*cm, bottomMargin=1*cm)
-        styles = getSampleStyleSheet()
+        # Estilos de texto
+        style_normal = ParagraphStyle('normal', fontSize=6.5, leading=8, alignment=TA_LEFT)
+        style_header = ParagraphStyle('header', fontSize=7, leading=9, alignment=TA_CENTER,
+                                       textColor=colors.white, fontName='Helvetica-Bold')
+        style_title = ParagraphStyle('title', fontSize=8, leading=10, alignment=TA_CENTER,
+                                      fontName='Helvetica-Bold')
+
+        # Anchos landscape A4
+        ancho_total = landscape(A4)[0] - 1.4*cm
+        # Marca y Nombre | Variedades | Presentacion | Cantidad | N inscripcion | Lote | Fecha venc | Origen | Fabricante | NCM
+        pesos = [4.2, 1.8, 1.1, 0.8, 2.0, 0.9, 1.4, 1.1, 3.2, 1.8]
+        total_pesos = sum(pesos)
+        col_widths = [ancho_total * p / total_pesos for p in pesos]
+
+        data = []
+        for row_idx, row in enumerate(ws.iter_rows(values_only=True)):
+            if row_idx == 0:
+                # Fila título
+                data.append([Paragraph(str(row[0]) if row[0] else '', style_title)] + ['' for _ in range(len(pesos)-1)])
+            elif row_idx == 1:
+                # Headers
+                cells = list(row)
+                # Ajustar si hay más o menos columnas
+                while len(cells) < len(pesos):
+                    cells.append('')
+                cells = cells[:len(pesos)]
+                data.append([Paragraph(str(c) if c else '', style_header) for c in cells])
+            else:
+                cells = list(row)
+                while len(cells) < len(pesos):
+                    cells.append('')
+                cells = cells[:len(pesos)]
+                data.append([Paragraph(str(c) if c is not None else '', style_normal) for c in cells])
 
         if not data:
             return None
 
-        # Anchos proporcionales por columna (landscape A4 = ~27.7cm util)
-        ancho_total = landscape(A4)[0] - 1.6*cm
-        # Pesos relativos por posicion de columna en COLUMNAS_SIN_PRIMERAS
-        # Marca y Nombre | Variedades | Presentacion | Cantidad | N inscripcion | Lote | Fecha venc | Origen | Fabricante | NCM
-        pesos = [4.5, 2.0, 1.2, 0.9, 2.2, 1.0, 1.5, 1.2, 3.5, 2.0]
-        n_cols = len(data[0])
-        if n_cols == len(pesos):
-            total_pesos = sum(pesos)
-            col_widths = [ancho_total * p / total_pesos for p in pesos]
-        else:
-            col_widths = [ancho_total / n_cols] * n_cols
+        buf = BytesIO()
+        doc = SimpleDocTemplate(buf, pagesize=landscape(A4),
+                                leftMargin=0.7*cm, rightMargin=0.7*cm,
+                                topMargin=0.8*cm, bottomMargin=0.8*cm)
 
         table = Table(data, colWidths=col_widths, repeatRows=2)
         table.setStyle(TableStyle([
             ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#D9D9D9')),
+            ('SPAN', (0,0), (-1,0)),
             ('BACKGROUND', (0,1), (-1,1), colors.HexColor('#70AD47')),
-            ('TEXTCOLOR', (0,1), (-1,1), colors.white),
-            ('FONTNAME', (0,0), (-1,1), 'Helvetica-Bold'),
-            ('FONTSIZE', (0,0), (-1,0), 7),
-            ('FONTSIZE', (0,1), (-1,1), 7),
-            ('FONTSIZE', (0,2), (-1,-1), 7),
-            ('ALIGN', (0,0), (-1,-1), 'LEFT'),
-            ('ALIGN', (0,0), (-1,1), 'CENTER'),
             ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
             ('GRID', (0,0), (-1,-1), 0.3, colors.HexColor('#CCCCCC')),
-            ('ROWBACKGROUNDS', (0,2), (-1,-1), [colors.white, colors.HexColor('#F5F5F5')]),
+            ('ROWBACKGROUNDS', (0,2), (-1,-1), [colors.white, colors.HexColor('#F7F7F7')]),
             ('LEFTPADDING', (0,0), (-1,-1), 3),
             ('RIGHTPADDING', (0,0), (-1,-1), 3),
-            ('TOPPADDING', (0,0), (-1,-1), 3),
-            ('BOTTOMPADDING', (0,0), (-1,-1), 3),
-            ('WORDWRAP', (0,0), (-1,-1), True),
+            ('TOPPADDING', (0,0), (-1,-1), 2),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 2),
         ]))
         doc.build([table])
         buf.seek(0)
