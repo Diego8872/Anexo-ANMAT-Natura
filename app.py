@@ -24,23 +24,6 @@ st.set_page_config(
 # ─────────────────────────────────────────
 st.markdown("""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap');
-    
-    html, body, [class*="css"] { font-family: 'Roboto', sans-serif; }
-    
-    /* Forzar todos los textos a color visible */
-    .stApp, .stApp * { color: #e0e6f0; }
-    .stMarkdown, .stMarkdown p, .stMarkdown span { color: #e0e6f0 !important; }
-    div[data-testid="stFileUploaderLabel"], 
-    div[data-testid="stFileUploaderLabel"] p,
-    div[data-testid="stFileUploaderLabel"] span { color: #e0e6f0 !important; font-weight: 600 !important; }
-    div[data-testid="stFileUploaderDropzoneInstructions"] span { color: #8b9ab0 !important; }
-    .stTextInput input { color: #e0e6f0 !important; background: #1a1d27 !important; }
-    .stTextInput label, .stTextInput label p { color: #e0e6f0 !important; }
-    p[style*="color:#000000"] { color: #e0e6f0 !important; }
-    
-    .main { background-color: #0f1117; }
-    
     .header-box {
         background: linear-gradient(135deg, #e8f4f8 0%, #d0eaf5 100%);
         border-left: 5px solid #00b4d8;
@@ -49,78 +32,16 @@ st.markdown("""
         margin-bottom: 24px;
     }
     .header-box h1 { color: #00b4d8; font-size: 1.6rem; font-weight: 700; margin: 0 0 4px 0; }
-    .header-box p { color: #555; font-size: 0.9rem; margin: 0; }
-
-    .card {
-        background: #ffffff;
-        border: 1px solid #dde3ea;
-        border-radius: 8px;
-        padding: 20px;
-        margin-bottom: 16px;
-        box-shadow: 0 1px 4px rgba(0,0,0,0.06);
-    }
-    .card h3 {
-        color: #00b4d8;
-        font-size: 0.9rem;
-        font-weight: 700;
-        margin: 0 0 14px 0;
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-    }
-
-    .alert-box {
-        background: #fff5f5;
-        border: 1px solid #ffb3b3;
-        border-radius: 6px;
-        padding: 12px 16px;
-        margin: 6px 0;
-        color: #cc0000;
-        font-size: 0.9rem;
-    }
+    .header-box p { color: #444; font-size: 0.9rem; margin: 0; }
+    .card { background: #ffffff; border: 1px solid #dde3ea; border-radius: 8px; padding: 20px; margin-bottom: 16px; box-shadow: 0 1px 4px rgba(0,0,0,0.06); }
+    .card h3 { color: #00b4d8; font-size: 0.9rem; font-weight: 700; margin: 0 0 14px 0; text-transform: uppercase; letter-spacing: 0.06em; }
+    .alert-box { background: #fff5f5; border: 1px solid #ffb3b3; border-radius: 6px; padding: 12px 16px; margin: 6px 0; color: #cc0000; font-size: 0.9rem; }
     .alert-box strong { color: #990000; }
-
-    .success-box {
-        background: #f0fff8;
-        border: 1px solid #00c896;
-        border-radius: 6px;
-        padding: 12px 16px;
-        margin: 6px 0;
-        color: #007a5c;
-        font-size: 0.9rem;
-    }
-
-    .stat-card {
-        background: #ffffff;
-        border: 1px solid #dde3ea;
-        border-radius: 8px;
-        padding: 16px;
-        text-align: center;
-        box-shadow: 0 1px 4px rgba(0,0,0,0.05);
-    }
+    .success-box { background: #f0fff8; border: 1px solid #00c896; border-radius: 6px; padding: 12px 16px; margin: 6px 0; color: #007a5c; font-size: 0.9rem; }
+    .stat-card { background: #ffffff; border: 1px solid #dde3ea; border-radius: 8px; padding: 16px; text-align: center; box-shadow: 0 1px 4px rgba(0,0,0,0.05); }
     .stat-card .number { color: #00b4d8; font-size: 2rem; font-weight: 700; line-height: 1; }
     .stat-card .label { color: #888; font-size: 0.78rem; margin-top: 4px; text-transform: uppercase; letter-spacing: 0.05em; }
-
-    .step-badge {
-        display: inline-block;
-        background: #00b4d8;
-        color: #ffffff;
-        border-radius: 50%;
-        width: 22px; height: 22px;
-        text-align: center; line-height: 22px;
-        font-weight: 700; font-size: 0.78rem;
-        margin-right: 8px;
-    }
-
-    div[data-testid="stButton"] > button {
-        background: #00b4d8;
-        color: #ffffff;
-        font-weight: 700;
-        border: none;
-        border-radius: 6px;
-        padding: 10px 24px;
-        width: 100%;
-    }
-    div[data-testid="stButton"] > button:hover { background: #0090b0; }
+    .step-badge { display: inline-block; background: #00b4d8; color: #ffffff; border-radius: 50%; width: 22px; height: 22px; text-align: center; line-height: 22px; font-weight: 700; font-size: 0.78rem; margin-right: 8px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -541,7 +462,7 @@ if 'datos_avon_completados' not in st.session_state:
 # ─────────────────────────────────────────
 st.markdown('<div class="card"><h3><span class="step-badge">1</span>Archivos de la operación</h3>', unsafe_allow_html=True)
 
-st.markdown('<p style="color:#333333; font-weight:600; font-size:0.95rem; margin-bottom:4px;">📌 Número de referencia de la operación</p>', unsafe_allow_html=True)
+st.markdown("**📌 Número de referencia de la operación**")
 nro_referencia = st.text_input("", placeholder="ej: 4550595912", label_visibility="collapsed")
 
 col1, col2 = st.columns(2)
