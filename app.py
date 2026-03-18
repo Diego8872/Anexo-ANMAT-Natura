@@ -80,35 +80,24 @@ def normalizar_pais(origen_str):
     return s.split(' ')[0].strip().lower()
 
 @st.cache_data
-def cargar_anmat(file_bytes=None):
-    if file_bytes:
-        buf = BytesIO(file_bytes)
-    else:
-        buf = open(os.path.join(os.path.dirname(__file__), 'REGISTROS_ANMAT_HISTORICO.xlsb'), 'rb')
+def cargar_anmat(file_bytes):
+    buf = BytesIO(file_bytes)
     try:
         df = pd.read_excel(buf, sheet_name='HISTORICO', header=0, engine='pyxlsb')
     except:
-        if hasattr(buf, 'seek'):
-            buf.seek(0)
+        buf.seek(0)
         df = pd.read_excel(buf, sheet_name='HISTORICO', header=0)
     df['CM'] = df['CM'].astype(str).str.strip()
     return df
 
 @st.cache_data
-def cargar_avon(file_bytes=None):
-    if file_bytes:
-        buf = BytesIO(file_bytes)
-    else:
-        buf = open(os.path.join(os.path.dirname(__file__), 'Registros_Avon.xlsx'), 'rb')
+def cargar_avon(file_bytes):
+    buf = BytesIO(file_bytes)
     return pd.read_excel(buf, header=0)
 
 @st.cache_data
-def cargar_fabricantes(file_bytes=None, suffix='.xls'):
-    if file_bytes:
-        buf = BytesIO(file_bytes)
-    else:
-        buf = open(os.path.join(os.path.dirname(__file__), 'Fabricantes.xls'), 'rb')
-        suffix = '.xls'
+def cargar_fabricantes(file_bytes, suffix='.xlsx'):
+    buf = BytesIO(file_bytes)
     if suffix == '.xls':
         df = pd.read_excel(buf, header=1, engine='xlrd')
     else:
@@ -117,11 +106,8 @@ def cargar_fabricantes(file_bytes=None, suffix='.xls'):
     return df
 
 @st.cache_data
-def cargar_ncm(file_bytes=None):
-    if file_bytes:
-        buf = BytesIO(file_bytes)
-    else:
-        buf = open(os.path.join(os.path.dirname(__file__), 'Catálogo_ncm.xlsx'), 'rb')
+def cargar_ncm(file_bytes):
+    buf = BytesIO(file_bytes)
     df = pd.read_excel(buf, header=0)
     df['Artículo'] = df['Artículo'].astype(str).str.strip()
     return df
@@ -662,13 +648,16 @@ nro_referencia = st.text_input("", placeholder="ej: 4550595912", label_visibilit
 col1, col2 = st.columns(2)
 with col1:
     f_pl = st.file_uploader("📦 Packing List", type=['xlsx'], key='pl')
-with col2:
     f_prox = st.file_uploader("📅 Próximas Importaciones", type=['xlsx'], key='prox')
+    f_anmat = st.file_uploader("🏥 Registro ANMAT Histórico", type=['xlsb', 'xlsx'], key='anmat')
+with col2:
+    f_avon = st.file_uploader("🌸 Registros Avon", type=['xlsx'], key='avon')
+    f_fab = st.file_uploader("🏭 Fabricantes", type=['xls', 'xlsx'], key='fab')
+    f_ncm = st.file_uploader("📊 Catálogo NCM", type=['xlsx'], key='ncm')
 
-st.markdown('<p style="color:#888; font-size:0.8rem; margin-top:8px;">📌 Registro ANMAT, Avon, Fabricantes y Catálogo NCM se cargan automáticamente desde los archivos del sistema.</p>', unsafe_allow_html=True)
 st.markdown('</div>', unsafe_allow_html=True)
 
-archivos_ok = all([f_pl, f_prox])
+archivos_ok = all([f_pl, f_prox, f_anmat, f_avon, f_fab, f_ncm])
 
 # ─────────────────────────────────────────
 # PASO 2: PROCESAR
@@ -679,12 +668,13 @@ if archivos_ok:
     if st.button("⚙️ Analizar y procesar", key='btn_procesar'):
         with st.spinner('Procesando...'):
             try:
+                suffix_fab = '.xls' if f_fab.name.endswith('.xls') else '.xlsx'
                 pl, invoice = cargar_pl(f_pl.read())
                 df_prox = cargar_proximas(f_prox.read())
-                df_anmat = cargar_anmat()
-                df_avon = cargar_avon()
-                df_fab = cargar_fabricantes()
-                df_ncm = cargar_ncm()
+                df_anmat = cargar_anmat(f_anmat.read())
+                df_avon = cargar_avon(f_avon.read())
+                df_fab = cargar_fabricantes(f_fab.read(), suffix=suffix_fab)
+                df_ncm = cargar_ncm(f_ncm.read())
 
                 filas, alertas_excluir, alertas_avon, alertas_generales = procesar_pl(
                     pl, df_anmat, df_avon, df_prox, df_fab, df_ncm
