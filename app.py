@@ -227,14 +227,14 @@ def separar_registros(registro_str):
     return [s]
 
 def buscar_por_registro(nro_registro, df_anmat):
-    """Busca en ANMAT por número de registro exacto en columna Registros ANMAT."""
+    """Busca en ANMAT por número de registro exacto. Devuelve lista de filas."""
     nro = str(nro_registro).strip()
     found = df_anmat[df_anmat['Registros ANMAT'].astype(str).str.strip() == nro]
     if len(found) == 0:
-        return None, f"⚠️ Registro {nro} no encontrado en ANMAT Histórico"
-    if len(found) > 1:
-        return None, f"⚠️ Registro {nro} aparece más de una vez en ANMAT Histórico"
-    return found.iloc[0], None
+        return None, "NOT_FOUND"
+    if len(found) == 1:
+        return [found.iloc[0]], None
+    return [found.iloc[i] for i in range(len(found))], "MULTIPLE"
 
 def parsear_fecha_vencimiento(expire_str):
     """Convierte MM/YYYY a datetime."""
@@ -350,39 +350,46 @@ def procesar_pl(pl, df_anmat, df_avon, df_prox, df_fab, df_ncm):
                 filas.append(fila)
                 # Filas expandidas por cada registro individual
                 for nro in registros:
-                    anmat_nro, alerta_nro = buscar_por_registro(nro, df_anmat)
-                    fila_exp = {
-                        'MATERIAL': '',
-                        'descripcion_factura': '',
-                        'Marca y Nombre del producto': '',
-                        'Variedades': '',
-                        'Presentación': '',
-                        'Cantidad': '',
-                        'N° de inscripcion': nro,
-                        'Lote': '',
-                        'Fecha de vencimiento': '',
-                        'Origen': '',
-                        'Fabricante': '',
-                        'Posición Arancelaria': '',
-                        '_alertas': [],
-                        '_skip': False,
-                        '_avon': False,
-                        '_necesita_completar': False,
-                        '_expanded': True,
-                    }
-                    if alerta_nro:
-                        fila_exp['_alertas'].append(alerta_nro)
-                        alertas_generales.append(alerta_nro)
+                    anmat_rows, status = buscar_por_registro(nro, df_anmat)
+                    if status == "NOT_FOUND":
+                        msg = "No encontrado: " + nro
+                        fila_exp = {
+                            'MATERIAL': '', 'descripcion_factura': '',
+                            'Marca y Nombre del producto': '', 'Variedades': '',
+                            'Presentación': '', 'Cantidad': '',
+                            'N° de inscripcion': nro, 'Lote': '',
+                            'Fecha de vencimiento': '', 'Origen': '',
+                            'Fabricante': '', 'Posición Arancelaria': '',
+                            '_alertas': [msg], '_skip': False,
+                            '_avon': False, '_necesita_completar': False,
+                            '_expanded': True, '_multi_opciones': False,
+                            '_nro_registro': nro,
+                        }
+                        alertas_generales.append(msg)
+                        filas.append(fila_exp)
                     else:
-                        n = str(anmat_nro['NOMBRE']) if pd.notna(anmat_nro['NOMBRE']) else ''
-                        v = str(anmat_nro['Variedad']) if pd.notna(anmat_nro['Variedad']) else ''
-                        c = str(anmat_nro['CONTENIDO NETO']) if pd.notna(anmat_nro['CONTENIDO NETO']) else ''
-                        if 'REFIL' in descripcion_pl.upper():
-                            n = n + ' (REPUESTO)'
-                        fila_exp['Marca y Nombre del producto'] = n
-                        fila_exp['Variedades'] = v if v != 'nan' else ''
-                        fila_exp['Presentación'] = c if c != 'nan' else ''
-                    filas.append(fila_exp)
+                        es_multiple = status == "MULTIPLE"
+                        for anmat_nro in anmat_rows:
+                            n = str(anmat_nro['NOMBRE']) if pd.notna(anmat_nro['NOMBRE']) else ''
+                            v = str(anmat_nro['Variedad']) if pd.notna(anmat_nro['Variedad']) else ''
+                            c = str(anmat_nro['CONTENIDO NETO']) if pd.notna(anmat_nro['CONTENIDO NETO']) else ''
+                            if 'REFIL' in descripcion_pl.upper():
+                                n = n + ' (REPUESTO)'
+                            fila_exp = {
+                                'MATERIAL': '', 'descripcion_factura': '',
+                                'Marca y Nombre del producto': n,
+                                'Variedades': v if v != 'nan' else '',
+                                'Presentación': c if c != 'nan' else '',
+                                'Cantidad': '', 'N° de inscripcion': nro,
+                                'Lote': '', 'Fecha de vencimiento': '',
+                                'Origen': '', 'Fabricante': '',
+                                'Posición Arancelaria': '',
+                                '_alertas': [], '_skip': es_multiple,
+                                '_avon': False, '_necesita_completar': False,
+                                '_expanded': True, '_multi_opciones': es_multiple,
+                                '_nro_registro': nro,
+                            }
+                            filas.append(fila_exp)
                 # Saltar el append al final del loop
                 ncm, alerta_ncm = buscar_ncm(mat_code, df_ncm)
                 if alerta_ncm:
@@ -448,7 +455,7 @@ def separar_anexos(filas):
             continue
         desc = fila['descripcion_factura'].upper()
         es_difusor = 'DIFUSOR' in desc
-        es_3x1 = '3X1' in desc or '3 X 1' in desc
+        es_3x1 = bool(re.search(r'3\s*[Xx]\s*1(?![0-9])', desc))
         if es_difusor and es_3x1:
             alertas_sep.append(f"Material {fila['MATERIAL']} tiene DIFUSOR y 3X1 — verificar.")
             principal.append(fila)
@@ -717,6 +724,41 @@ if st.session_state.filas_procesadas is not None:
         st.markdown(f'<div class="stat-card"><div class="number" style="color:#ff6b6b">{skip}</div><div class="label">No encontrados</div></div>', unsafe_allow_html=True)
 
     st.markdown('<br>', unsafe_allow_html=True)
+
+    # ── Alertas: registros con múltiples coincidencias ──
+    filas_multi = [f for f in st.session_state.filas_procesadas if f.get('_multi_opciones')]
+    if filas_multi:
+        grupos_multi = {}
+        for f in filas_multi:
+            nro = f.get('_nro_registro', '')
+            if nro not in grupos_multi:
+                grupos_multi[nro] = []
+            grupos_multi[nro].append(f)
+
+        if 'incluidos_multi' not in st.session_state:
+            st.session_state.incluidos_multi = set()
+
+        st.markdown('<div class="card"><h3>🔀 Registros con múltiples coincidencias</h3>', unsafe_allow_html=True)
+        for nro, opciones in grupos_multi.items():
+            st.markdown('<div class="alert-box"><strong>Registro ' + nro + '</strong> — encontrado ' + str(len(opciones)) + ' veces. Seleccioná cuál/es incluir:</div>', unsafe_allow_html=True)
+            for i, op in enumerate(opciones):
+                key_op = 'multi_' + nro + '_' + str(i)
+                incluido = key_op in st.session_state.incluidos_multi
+                col1, col2 = st.columns([5, 1])
+                with col1:
+                    nombre_op = op.get('Marca y Nombre del producto', '')
+                    variedad_op = op.get('Variedades', '—')
+                    pres_op = op.get('Presentación', '—')
+                    st.markdown('<div style="background:#f8f9fa;border:1px solid #dde3ea;border-radius:6px;padding:10px;margin:4px 0;font-size:0.85rem;"><strong>' + nombre_op + '</strong> | Variedad: ' + variedad_op + ' | Presentación: ' + pres_op + '</div>', unsafe_allow_html=True)
+                with col2:
+                    label_op = "✅ Incluida" if incluido else "Incluir"
+                    if st.button(label_op, key='btn_' + key_op):
+                        if incluido:
+                            st.session_state.incluidos_multi.discard(key_op)
+                        else:
+                            st.session_state.incluidos_multi.add(key_op)
+                        st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
 
     # ── Alertas: vencimientos ──
     alertas_venc = [f for f in st.session_state.filas_procesadas if f.get('_vencimiento') in ('vencido', 'proximo') and not f['_skip']]
