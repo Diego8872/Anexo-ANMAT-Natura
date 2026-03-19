@@ -150,6 +150,10 @@ def cargar_proximas(file_bytes):
         f.write(file_bytes)
         tmp = f.name
     df = pd.read_excel(tmp, header=0)
+    # Normalizar nombre de columna Material (puede venir como 'Material', 'MATERIAL', etc)
+    col_map = {c.strip().lower(): c for c in df.columns}
+    if 'material' in col_map:
+        df = df.rename(columns={col_map['material']: 'Material'})
     df['Material'] = df['Material'].astype(str).str.strip()
     return df
 
