@@ -828,16 +828,39 @@ if st.session_state.filas_procesadas is not None:
 
     if st.button("📄 Generar Anexo completo", key='btn_generar'):
         with st.spinner('Generando archivos...'):
-            # Aplicar datos completados por usuario
+            incluidos_multi = st.session_state.get('incluidos_multi', set())
+            # Indexar filas multi por nro_registro
+            multi_keys = {}
+            for f in filas:
+                if f.get('_multi_opciones'):
+                    nro = f.get('_nro_registro', '')
+                    if nro not in multi_keys:
+                        multi_keys[nro] = []
+                    multi_keys[nro].append(f)
+
             filas_final = []
             for fila in filas:
                 mat = fila['MATERIAL']
-                key_venc = f'{mat}_{fila.get("Lote","")}'
+                key_venc = mat + '_' + fila.get('Lote', '')
                 if mat in st.session_state.excluidos:
                     continue
-                if f'venc_{key_venc}' in st.session_state.excluidos:
+                if 'venc_' + key_venc in st.session_state.excluidos:
                     continue
-                f = fila.copy()
+                # Filas multi: incluir solo las seleccionadas por el operador
+                if fila.get('_multi_opciones'):
+                    nro = fila.get('_nro_registro', '')
+                    opciones = multi_keys.get(nro, [])
+                    idx = opciones.index(fila) if fila in opciones else -1
+                    key_op = 'multi_' + nro + '_' + str(idx)
+                    if key_op not in incluidos_multi:
+                        continue
+                    # Incluir — quitar _skip para que pase separar_anexos
+                    f = fila.copy()
+                    f['_skip'] = False
+                elif fila.get('_skip'):
+                    continue
+                else:
+                    f = fila.copy()
                 if fila.get('_avon') and mat in st.session_state.datos_avon_completados:
                     datos = st.session_state.datos_avon_completados[mat]
                     if datos.get('fabricante'):
