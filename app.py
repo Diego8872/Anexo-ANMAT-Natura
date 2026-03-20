@@ -216,7 +216,7 @@ def verificar_origen_proximas(origen_anmat, mat_code, df_prox):
 
 from datetime import datetime, timedelta
 
-SEPARADORES_REGISTRO = [' - ', ' / ', ' | ', '\n', '; ']
+SEPARADORES_REGISTRO = [' - ', ' + ', ' / ', ' | ', '\n', '; ', '+', ',']
 
 def separar_registros(registro_str):
     """Detecta si hay múltiples N° de inscripción y los separa."""
