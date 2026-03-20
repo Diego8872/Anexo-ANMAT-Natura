@@ -781,7 +781,7 @@ if st.session_state.filas_procesadas is not None:
                 st.markdown(f'<div class="alert-box" style="border-color:{color}; color:{color};">{icono} <strong>{fila["MATERIAL"]}</strong> — Lote {fila["Lote"]} — {msg_str}</div>', unsafe_allow_html=True)
             with col2:
                 label = "✅ Excluido" if excluido else "Excluir"
-                if st.button(label, key=f'btn_{key_excl}'):
+                if st.button(label, key=f'btn_venc_{key_excl}'):
                     st.session_state.excluidos.add(key_excl)
                     st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
@@ -789,14 +789,14 @@ if st.session_state.filas_procesadas is not None:
     # ── Alertas: no encontrados en ANMAT ni Avon ──
     if st.session_state.alertas_excluir:
         st.markdown('<div class="card"><h3>⚠️ No encontrados en ANMAT ni Avon — ¿excluir del anexo?</h3>', unsafe_allow_html=True)
-        for item in st.session_state.alertas_excluir:
+        for idx_excl, item in enumerate(st.session_state.alertas_excluir):
             col1, col2 = st.columns([4, 1])
             with col1:
                 st.markdown(f'<div class="alert-box"><strong>{item["material"]}</strong> — {item["descripcion"]}</div>', unsafe_allow_html=True)
             with col2:
                 excluido = item['material'] in st.session_state.excluidos
                 label = "✅ Excluido" if excluido else "Excluir del Anexo"
-                if st.button(label, key=f'excl_{item["material"]}'):
+                if st.button(label, key=f'excl_{item["material"]}_{idx_excl}'):
                     st.session_state.excluidos.add(item['material'])
                     st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
