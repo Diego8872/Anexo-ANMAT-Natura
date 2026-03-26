@@ -373,7 +373,7 @@ def procesar_pl(pl, df_anmat, df_avon, df_prox, df_fab, df_ncm):
                         filas.append(fila_exp)
                     else:
                         es_multiple = status == "MULTIPLE"
-                        for anmat_nro in anmat_rows:
+                        for multi_i, anmat_nro in enumerate(anmat_rows):
                             n = str(anmat_nro['NOMBRE']) if pd.notna(anmat_nro['NOMBRE']) else ''
                             v = str(anmat_nro['Variedad']) if pd.notna(anmat_nro['Variedad']) else ''
                             c = str(anmat_nro['CONTENIDO NETO']) if pd.notna(anmat_nro['CONTENIDO NETO']) else ''
@@ -392,6 +392,7 @@ def procesar_pl(pl, df_anmat, df_avon, df_prox, df_fab, df_ncm):
                                 '_avon': False, '_necesita_completar': False,
                                 '_expanded': True, '_multi_opciones': es_multiple,
                                 '_nro_registro': nro,
+                                '_multi_idx': multi_i,
                             }
                             filas.append(fila_exp)
                 # Saltar el append al final del loop
@@ -563,25 +564,29 @@ def excel_a_pdf_bytes(excel_bytes, nombre_base):
         total_pesos = sum(pesos)
         col_widths = [ancho_total * p / total_pesos for p in pesos]
 
+        def safe_para(val, style):
+            try:
+                txt = str(val) if val is not None else ''
+                # Escapar caracteres especiales XML
+                txt = txt.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                return Paragraph(txt, style)
+            except:
+                return Paragraph('', style)
+
         data = []
         for row_idx, row in enumerate(ws.iter_rows(values_only=True)):
             if row_idx == 0:
-                # Fila título
-                data.append([Paragraph(str(row[0]) if row[0] else '', style_title)] + ['' for _ in range(len(pesos)-1)])
+                data.append([safe_para(row[0], style_title)] + ['' for _ in range(len(pesos)-1)])
             elif row_idx == 1:
-                # Headers
                 cells = list(row)
-                # Ajustar si hay más o menos columnas
-                while len(cells) < len(pesos):
-                    cells.append('')
+                while len(cells) < len(pesos): cells.append('')
                 cells = cells[:len(pesos)]
-                data.append([Paragraph(str(c) if c else '', style_header) for c in cells])
+                data.append([safe_para(c, style_header) for c in cells])
             else:
                 cells = list(row)
-                while len(cells) < len(pesos):
-                    cells.append('')
+                while len(cells) < len(pesos): cells.append('')
                 cells = cells[:len(pesos)]
-                data.append([Paragraph(str(c) if c is not None else '', style_normal) for c in cells])
+                data.append([safe_para(c, style_normal) for c in cells])
 
         if not data:
             return None
@@ -608,6 +613,8 @@ def excel_a_pdf_bytes(excel_bytes, nombre_base):
         buf.seek(0)
         return buf.getvalue()
     except Exception as e:
+        print(f'PDF error: {e}')
+        import traceback; traceback.print_exc()
         return None
 
 def generar_zip(grupos, invoice):
@@ -853,8 +860,7 @@ if st.session_state.filas_procesadas is not None:
                 # Filas multi: incluir solo las seleccionadas por el operador
                 if fila.get('_multi_opciones'):
                     nro = fila.get('_nro_registro', '')
-                    opciones = multi_keys.get(nro, [])
-                    idx = opciones.index(fila) if fila in opciones else -1
+                    idx = fila.get('_multi_idx', -1)
                     key_op = 'multi_' + nro + '_' + str(idx)
                     if key_op not in incluidos_multi:
                         continue
