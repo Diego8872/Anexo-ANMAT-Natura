@@ -351,6 +351,7 @@ def procesar_pl(pl, df_anmat, df_avon, df_prox, df_fab, df_ncm):
                 fila['Presentación'] = contenido if contenido != 'nan' else ''
                 fila['N° de inscripcion'] = registro if registro != 'nan' else ''
                 fila['_multi_registro'] = True
+                idx_fila_principal = len(filas)  # guardar índice ANTES de agregar
                 filas.append(fila)
                 # Filas expandidas por cada registro individual
                 for nro in registros:
@@ -395,12 +396,12 @@ def procesar_pl(pl, df_anmat, df_avon, df_prox, df_fab, df_ncm):
                                 '_multi_idx': multi_i,
                             }
                             filas.append(fila_exp)
-                # Saltar el append al final del loop
+                # Asignar NCM a la fila principal usando índice guardado
                 ncm, alerta_ncm = buscar_ncm(mat_code, df_ncm)
                 if alerta_ncm:
                     alertas_generales.append(alerta_ncm)
                 else:
-                    filas[-len(registros)-1]['Posición Arancelaria'] = ncm
+                    filas[idx_fila_principal]['Posición Arancelaria'] = ncm
                 continue
 
         else:
