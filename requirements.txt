@@ -5,3 +5,4 @@ numpy
 pyxlsb
 xlrd
 reportlab
+extract-msg
