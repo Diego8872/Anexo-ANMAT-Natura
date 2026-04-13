@@ -540,6 +540,10 @@ def cargar_pl_muestras(file_bytes):
     items = []
 
     for sh in xl.sheet_names:
+        # Solo procesar la solapa de Packing List
+        if 'packing' not in sh.lower():
+            continue
+
         df_raw = pd.read_excel(tmp, sheet_name=sh, header=None)
 
         # Buscar invoice
@@ -692,20 +696,63 @@ def procesar_muestras(items_pl, items_mail):
     Cruza PL con la tabla del mail.
     Solo procesa los ítems donde ANMAT = Sí.
     NCM viene del mail.
-    Retorna: (filas_anexo, codigos_si_no_encontrados_en_pl)
+
+    Lógica columna cantidad:
+    - Si todos los ítems tienen el mismo tipo → col header = 'Cantidad en KG/gramos/unidades',
+      valor = número solo
+    - Si hay mezcla → col header = 'Cantidad', valor = 'X kg' / 'Y g' / 'Z un'
+    Retorna: (filas_anexo, no_en_pl, col_cantidad_header)
     """
-    mail_dict   = {it['codigo'].strip(): it for it in items_mail}
-    codigos_si  = {cod for cod, it in mail_dict.items() if it['anmat']}
-    codigos_pl  = {it['material'] for it in items_pl}
+    sufijo_map   = {'kg': 'kg',       'g': 'g',       'un': 'un'}
+    col_map      = {'kg': 'Cantidad en KG', 'g': 'Cantidad en gramos', 'un': 'Cantidad en unidades'}
+    nombre_pres  = {'kg': 'kilos',    'g': 'gramos',  'un': 'unidades'}
+
+    mail_dict  = {it['codigo'].strip(): it for it in items_mail}
+    codigos_si = {cod for cod, it in mail_dict.items() if it['anmat']}
+    codigos_pl = {it['material'] for it in items_pl}
+
+    # Primero determinar qué tipos de cantidad existen en los ítems con ANMAT=Sí
+    tipos_global = set()
+    for item in items_pl:
+        if item['material'] in codigos_si:
+            tipos_global.update(item['cantidades'].keys())
+
+    un_solo_tipo = len(tipos_global) == 1
+    tipo_unico   = list(tipos_global)[0] if un_solo_tipo else None
+    col_cantidad_header = col_map.get(tipo_unico, 'Cantidad') if un_solo_tipo else 'Cantidad'
 
     filas = []
     for item in items_pl:
         mat = item['material']
         if mat not in codigos_si:
-            continue  # ANMAT = No o no está en el mail → ignorar
+            continue
 
         mail_item = mail_dict[mat]
-        presentacion, cantidad = _resolver_presentacion_cantidad(item['cantidades'])
+        cantidades = item['cantidades']
+        tipos_item = [t for t in ('kg', 'g', 'un') if t in cantidades]
+
+        # Presentación
+        if len(tipos_item) == 0:
+            presentacion = ''
+            cantidad_val = ''
+        elif len(tipos_item) == 1:
+            t = tipos_item[0]
+            presentacion = nombre_pres[t]
+            v = cantidades[t]
+            if un_solo_tipo:
+                # Columna ya dice la unidad → valor numérico solo
+                cantidad_val = int(v) if v == int(v) else v
+            else:
+                # Mezcla global → valor con sufijo
+                cantidad_val = f"{int(v) if v == int(v) else v} {sufijo_map[t]}"
+        else:
+            # Múltiples tipos en este ítem
+            presentacion = ' / '.join(nombre_pres[t] for t in tipos_item)
+            partes = []
+            for t in tipos_item:
+                v = cantidades[t]
+                partes.append(f"{int(v) if v == int(v) else v} {sufijo_map[t]}")
+            cantidad_val = ' / '.join(partes)
 
         filas.append({
             'MATERIAL':                     mat,
@@ -713,14 +760,13 @@ def procesar_muestras(items_pl, items_mail):
             'Marca y Nombre del producto':  item['descripcion'],
             'Variedades':                   'N/C',
             'Presentación':                 presentacion,
-            'Cantidad':                     cantidad,
+            'Cantidad':                     cantidad_val,
             'N° de inscripcion':            'N/C',
             'Lote':                         item['lot'],
             'Fecha de vencimiento':         item['expire'],
             'Origen':                       ORIGEN_MUESTRAS,
             'Fabricante':                   FABRICANTE_MUESTRAS,
             'Posición Arancelaria':         mail_item['ncm'],
-            # Internos
             '_alertas':           [],
             '_skip':              False,
             '_avon':              False,
@@ -730,10 +776,8 @@ def procesar_muestras(items_pl, items_mail):
             '_expanded':          False,
         })
 
-    # Códigos con ANMAT=Sí que no aparecieron en el PL
     no_en_pl = [cod for cod in codigos_si if cod not in codigos_pl]
-
-    return filas, no_en_pl
+    return filas, no_en_pl, col_cantidad_header
 
 
 # ─────────────────────────────────────────
@@ -750,7 +794,7 @@ ANCHOS = {'MATERIAL': 12, 'descripcion_factura': 35, 'Marca y Nombre del product
           'Lote': 14, 'Fecha de vencimiento': 18, 'Origen': 14, 'Fabricante': 45,
           'Posición Arancelaria': 20}
 
-def escribir_excel_bytes(filas, incluir_primeras_cols=True):
+def escribir_excel_bytes(filas, incluir_primeras_cols=True, col_cantidad_header='Cantidad'):
     wb = Workbook()
     ws = wb.active
     ws.title = 'Anexo de Productos'
@@ -765,7 +809,9 @@ def escribir_excel_bytes(filas, incluir_primeras_cols=True):
 
     header_fill = PatternFill('solid', start_color='70AD47')
     for col_idx, col_name in enumerate(columnas, 1):
-        cell = ws.cell(row=2, column=col_idx, value=col_name)
+        # Renombrar columna Cantidad según el tipo detectado
+        display_name = col_cantidad_header if col_name == 'Cantidad' else col_name
+        cell = ws.cell(row=2, column=col_idx, value=display_name)
         cell.font = Font(name='Arial', bold=True, size=11, color='FFFFFF')
         cell.fill = header_fill
         cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
@@ -886,16 +932,16 @@ def excel_a_pdf_bytes(excel_bytes, nombre_base):
         print(f'PDF error: {e}')
         return None
 
-def generar_zip(grupos, invoice):
+def generar_zip(grupos, invoice, col_cantidad_header='Cantidad'):
     buf = BytesIO()
     with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
         for nombre, filas in grupos:
             if not filas:
                 continue
             nombre_base = f'ANEXO_{nombre}_{invoice}'
-            xls_completo = escribir_excel_bytes(filas, incluir_primeras_cols=True)
+            xls_completo = escribir_excel_bytes(filas, incluir_primeras_cols=True, col_cantidad_header=col_cantidad_header)
             zf.writestr(f'{nombre_base}.xlsx', xls_completo)
-            xls_sin = escribir_excel_bytes(filas, incluir_primeras_cols=False)
+            xls_sin = escribir_excel_bytes(filas, incluir_primeras_cols=False, col_cantidad_header=col_cantidad_header)
             zf.writestr(f'{nombre_base}_SIN_MAT.xlsx', xls_sin)
             pdf = excel_a_pdf_bytes(xls_sin, f'{nombre_base}_SIN_MAT')
             if pdf:
@@ -919,6 +965,7 @@ defaults = {
     'filas_muestras':          None,
     'invoice_muestras':        None,
     'alertas_muestras':        [],
+    'col_cantidad_muestras':   'Cantidad',
 }
 for k, v in defaults.items():
     if k not in st.session_state:
@@ -971,15 +1018,16 @@ if modo == "Muestras Natura":
                         st.error("No se encontraron ítems en el Packing List.")
                         st.stop()
 
-                    filas_m, no_en_pl = procesar_muestras(items_pl, items_mail)
+                    filas_m, no_en_pl, col_cant_hdr = procesar_muestras(items_pl, items_mail)
 
                     alertas_m = []
                     for cod in no_en_pl:
                         alertas_m.append(f"⚠️ Código {cod} tiene ANMAT=Sí en el mail pero no se encontró en el Packing List.")
 
-                    st.session_state.filas_muestras    = filas_m
-                    st.session_state.invoice_muestras  = invoice_m
-                    st.session_state.alertas_muestras  = alertas_m
+                    st.session_state.filas_muestras        = filas_m
+                    st.session_state.invoice_muestras      = invoice_m
+                    st.session_state.alertas_muestras      = alertas_m
+                    st.session_state.col_cantidad_muestras = col_cant_hdr
 
                 except Exception as e:
                     import traceback
@@ -1017,7 +1065,8 @@ if modo == "Muestras Natura":
         if st.button("📄 Generar Anexo de Muestras", key='btn_generar_muestras'):
             with st.spinner('Generando archivos...'):
                 ref = nro_ref_m.strip() if nro_ref_m.strip() else (invoice_m or 'MUESTRAS')
-                zip_bytes = generar_zip([('MUESTRAS', filas_m)], ref)
+                col_hdr = st.session_state.get('col_cantidad_muestras', 'Cantidad')
+                zip_bytes = generar_zip([('MUESTRAS', filas_m)], ref, col_cantidad_header=col_hdr)
                 st.markdown('<div class="success-box">✅ Anexo de Muestras generado correctamente</div>', unsafe_allow_html=True)
                 st.markdown(f"**MUESTRAS**: {len(filas_m)} ítems")
                 st.download_button(
