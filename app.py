@@ -789,10 +789,10 @@ COLUMNAS_SALIDA = ['MATERIAL', 'descripcion_factura', 'Marca y Nombre del produc
                    'Lote', 'Fecha de vencimiento', 'Origen', 'Fabricante', 'Posición Arancelaria']
 COLUMNAS_SIN_PRIMERAS = COLUMNAS_SALIDA[2:]
 
-ANCHOS = {'MATERIAL': 12, 'descripcion_factura': 35, 'Marca y Nombre del producto': 45,
-          'Variedades': 20, 'Presentación': 14, 'Cantidad': 14, 'N° de inscripcion': 22,
-          'Lote': 14, 'Fecha de vencimiento': 18, 'Origen': 14, 'Fabricante': 45,
-          'Posición Arancelaria': 20}
+ANCHOS = {'MATERIAL': 14, 'descripcion_factura': 38, 'Marca y Nombre del producto': 48,
+          'Variedades': 14, 'Presentación': 14, 'Cantidad': 14, 'N° de inscripcion': 24,
+          'Lote': 18, 'Fecha de vencimiento': 20, 'Origen': 14, 'Fabricante': 48,
+          'Posición Arancelaria': 22}
 
 def escribir_excel_bytes(filas, incluir_primeras_cols=True, col_cantidad_header='Cantidad'):
     wb = Workbook()
@@ -837,14 +837,16 @@ def escribir_excel_bytes(filas, incluir_primeras_cols=True, col_cantidad_header=
                         pass
             cell = ws.cell(row=row_idx, column=col_idx, value=val)
             cell.font = Font(name='Calibri', size=11)
-            cell.alignment = Alignment(vertical='center', wrap_text=True)
+            cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
             if tiene_alerta:
                 cell.fill = alerta_fill
 
     for col_idx, col_name in enumerate(columnas, 1):
         ws.column_dimensions[get_column_letter(col_idx)].width = ANCHOS.get(col_name, 15)
 
-    ws.row_dimensions[2].height = 30
+    # Altura fija suficiente para headers y datos
+    ws.row_dimensions[1].height = 22
+    ws.row_dimensions[2].height = 40
     ws.freeze_panes = 'A3'
 
     if not incluir_primeras_cols:
@@ -871,14 +873,14 @@ def excel_a_pdf_bytes(excel_bytes, nombre_base):
         wb = load_workbook(BytesIO(excel_bytes))
         ws = wb.active
 
-        style_normal = ParagraphStyle('normal', fontSize=6.5, leading=8, alignment=TA_LEFT)
+        style_normal = ParagraphStyle('normal', fontSize=6.5, leading=8, alignment=TA_CENTER)
         style_header = ParagraphStyle('header', fontSize=7, leading=9, alignment=TA_CENTER,
                                        textColor=colors.white, fontName='Helvetica-Bold')
         style_title  = ParagraphStyle('title',  fontSize=8, leading=10, alignment=TA_CENTER,
                                        fontName='Helvetica-Bold')
 
         ancho_total = landscape(A4)[0] - 1.4*cm
-        pesos = [4.2, 1.8, 1.1, 0.8, 2.0, 0.9, 1.4, 1.1, 3.2, 1.8]
+        pesos = [4.0, 1.4, 1.4, 1.2, 2.2, 1.4, 1.8, 1.2, 3.8, 2.0]
         total_pesos = sum(pesos)
         col_widths = [ancho_total * p / total_pesos for p in pesos]
 
