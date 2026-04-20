@@ -20,9 +20,6 @@ st.set_page_config(
     layout="wide"
 )
 
-# ─────────────────────────────────────────
-# ESTILOS
-# ─────────────────────────────────────────
 st.markdown("""
 <style>
     .header-box {
@@ -51,19 +48,12 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ─────────────────────────────────────────
-# HEADER
-# ─────────────────────────────────────────
 st.markdown("""
 <div class="header-box">
     <h1>📋 Generador de Anexo ANMAT</h1>
     <p>Natura · Avon · Operaciones de importación</p>
 </div>
 """, unsafe_allow_html=True)
-
-# ─────────────────────────────────────────
-# FUNCIONES CORE — OPERACIÓN NORMAL
-# ─────────────────────────────────────────
 
 def limpiar_str(s):
     s = str(s).strip()
@@ -442,37 +432,32 @@ def procesar_pl(pl, df_anmat, df_avon, df_prox, df_fab, df_ncm):
     return filas, alertas_excluir, alertas_avon, alertas_generales
 
 def separar_anexos(filas):
-    principal, difusor, kit3x1, alertas_sep = [], [], [], []
+    principal, difusor, muestras, alertas_sep = [], [], [], []
+    palabras_muestra = ['amostra', 'muestra', 'sample', 'muestras', 'amostras']
     for fila in filas:
         if fila['_skip']:
             continue
         desc = fila['descripcion_factura'].upper()
+        desc_lower = fila['descripcion_factura'].lower()
         es_difusor = 'DIFUSOR' in desc
         es_3x1 = bool(re.search(r'3\s*[Xx]\s*1(?![0-9])', desc))
+        es_muestra = any(p in desc_lower for p in palabras_muestra)
+
         if es_difusor and es_3x1:
             alertas_sep.append(f"Material {fila['MATERIAL']} tiene DIFUSOR y 3X1 — verificar.")
             principal.append(fila)
         elif es_difusor:
             difusor.append(fila)
-        elif es_3x1:
-            kit3x1.append(fila)
+        elif es_3x1 and es_muestra:
+            muestras.append(fila)
         else:
             principal.append(fila)
-    return principal, difusor, kit3x1, alertas_sep
-
-# ─────────────────────────────────────────
-# FUNCIONES MUESTRAS NATURA
-# ─────────────────────────────────────────
+    return principal, difusor, muestras, alertas_sep
 
 FABRICANTE_MUESTRAS = 'INDUSTRIA E COMERCIO DE COSMÉTICOS NATURA LTDA'
 ORIGEN_MUESTRAS = 'Brasil'
 
 def parsear_msg(file_bytes):
-    """
-    Lee un archivo .msg y extrae la tabla Código / NCM / ANMAT
-    del primer bloque del cuerpo (antes del primer separador de reply).
-    Retorna: (lista de dicts {'codigo', 'ncm', 'anmat'}, error_str o None)
-    """
     try:
         import extract_msg
         with tempfile.NamedTemporaryFile(suffix='.msg', delete=False) as f:
@@ -483,11 +468,9 @@ def parsear_msg(file_bytes):
     except Exception as e:
         return None, f"No se pudo leer el archivo .msg: {e}"
 
-    # Solo primer bloque (antes del primer separador de cadena de reply)
     primer_bloque = re.split(r'_{3,}', body)[0]
     lineas = [l.strip() for l in primer_bloque.replace('\r\n', '\n').split('\n')]
 
-    # Buscar inicio de tabla
     inicio = None
     for i, l in enumerate(lineas):
         if 'código del artículo' in l.lower() or 'codigo del articulo' in l.lower():
@@ -497,11 +480,9 @@ def parsear_msg(file_bytes):
     if inicio is None:
         return None, "No se encontró la tabla Código / NCM / ANMAT en el mail."
 
-    # Filtrar líneas vacías y nombres de columnas repetidos
     cols_ignorar = {'ncm', 'anmat', 'código del artículo', 'codigo del articulo', ''}
     tokens = [l for l in lineas[inicio:] if l.lower() not in cols_ignorar]
 
-    # Agrupar de a 3: codigo, ncm, si/no
     items = []
     i = 0
     while i + 2 < len(tokens):
@@ -516,7 +497,7 @@ def parsear_msg(file_bytes):
             })
             i += 3
         else:
-            i += 1  # desplazar si no matchea el patrón
+            i += 1
 
     if not items:
         return None, "La tabla del mail no tiene el formato esperado (Código / NCM / Sí o No)."
@@ -525,12 +506,6 @@ def parsear_msg(file_bytes):
 
 
 def cargar_pl_muestras(file_bytes):
-    """
-    Carga el Packing List para muestras.
-    Detecta TODAS las columnas de cantidad presentes (KG, gramos, unidades).
-    Pueden coexistir las tres en el mismo archivo.
-    Retorna: (lista de dicts por ítem, invoice str)
-    """
     with tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False) as f:
         f.write(file_bytes)
         tmp = f.name
@@ -540,13 +515,11 @@ def cargar_pl_muestras(file_bytes):
     items = []
 
     for sh in xl.sheet_names:
-        # Solo procesar la solapa de Packing List
         if 'packing' not in sh.lower():
             continue
 
         df_raw = pd.read_excel(tmp, sheet_name=sh, header=None)
 
-        # Buscar invoice
         if not invoice:
             for i, row in df_raw.iterrows():
                 for val in row.values:
@@ -558,7 +531,6 @@ def cargar_pl_muestras(file_bytes):
                 if invoice:
                     break
 
-        # Buscar fila de headers con MATERIAL CODE
         header_row_idx = None
         for i, row in df_raw.iterrows():
             if any('MATERIAL CODE' in str(v).upper() for v in row.values if v):
@@ -569,7 +541,6 @@ def cargar_pl_muestras(file_bytes):
 
         headers = [str(v).strip().upper() if v else '' for v in df_raw.iloc[header_row_idx].values]
 
-        # Mapear columnas — pueden coexistir KG, gramos y unidades
         col_material = None
         col_qty_kg   = None
         col_qty_g    = None
@@ -591,7 +562,6 @@ def cargar_pl_muestras(file_bytes):
                 if col_qty_un is None:
                     col_qty_un = idx
             elif ('QUANTITY' in h or 'CANTIDAD' in h) and col_qty_kg is None and col_qty_g is None and col_qty_un is None:
-                # Primera columna de cantidad sin especificador → tratarla como KG
                 col_qty_kg = idx
             elif 'DESCRIPTION' in h or 'DESCRIPCI' in h:
                 if col_desc is None:
@@ -606,21 +576,18 @@ def cargar_pl_muestras(file_bytes):
         if col_material is None:
             continue
 
-        # Leer filas de datos (saltear fila vacía inmediata debajo del header)
         data_start = header_row_idx + 2
         for i in range(data_start, len(df_raw)):
             row = df_raw.iloc[i]
             mat = str(row.iloc[col_material]).strip() if col_material is not None else ''
             if not mat or mat == 'nan' or not re.search(r'\d', mat):
                 continue
-            # Detener al llegar a filas de totales / observaciones
             if any(kw in mat.upper() for kw in ('VOLUME', 'OBSERVAC', 'TOTAL')):
                 continue
 
             desc = str(row.iloc[col_desc]).strip() if col_desc is not None and pd.notna(row.iloc[col_desc]) else ''
             lot  = str(row.iloc[col_lot]).strip()  if col_lot  is not None and pd.notna(row.iloc[col_lot])  else ''
 
-            # Fecha de vencimiento
             expire_raw = row.iloc[col_expire] if col_expire is not None else None
             if isinstance(expire_raw, datetime):
                 expire_str = expire_raw.strftime('%d/%m/%Y')
@@ -629,7 +596,6 @@ def cargar_pl_muestras(file_bytes):
             else:
                 expire_str = ''
 
-            # Cantidades — capturar todos los tipos presentes
             cantidades = {}
             if col_qty_kg is not None:
                 v = row.iloc[col_qty_kg]
@@ -664,45 +630,7 @@ def cargar_pl_muestras(file_bytes):
     return items, invoice
 
 
-def _resolver_presentacion_cantidad(cantidades):
-    """
-    Dado el dict de cantidades detectadas, retorna (presentacion, cantidad_valor).
-
-    Reglas:
-    - 1 tipo  → presentacion = 'kilos'/'gramos'/'unidades', cantidad = valor numérico
-    - N tipos → presentacion = 'kilos / gramos / unidades' (los que correspondan),
-                cantidad     = 'X kg / Y g / Z un' (texto con la unidad en cada valor)
-    """
-    nombre_map  = {'kg': 'kilos', 'g': 'gramos', 'un': 'unidades'}
-    sufijo_map  = {'kg': 'kg',    'g': 'g',       'un': 'un'}
-    tipos = [t for t in ('kg', 'g', 'un') if t in cantidades]
-
-    if len(tipos) == 0:
-        return '', ''
-    if len(tipos) == 1:
-        t = tipos[0]
-        v = cantidades[t]
-        # Mostrar como entero si no tiene decimales
-        val = int(v) if v == int(v) else v
-        return nombre_map[t], val
-    # Varios tipos
-    presentacion = ' / '.join(nombre_map[t] for t in tipos)
-    cantidad_str = ' / '.join(f"{int(cantidades[t]) if cantidades[t] == int(cantidades[t]) else cantidades[t]} {sufijo_map[t]}" for t in tipos)
-    return presentacion, cantidad_str
-
-
 def procesar_muestras(items_pl, items_mail):
-    """
-    Cruza PL con la tabla del mail.
-    Solo procesa los ítems donde ANMAT = Sí.
-    NCM viene del mail.
-
-    Lógica columna cantidad:
-    - Si todos los ítems tienen el mismo tipo → col header = 'Cantidad en KG/gramos/unidades',
-      valor = número solo
-    - Si hay mezcla → col header = 'Cantidad', valor = 'X kg' / 'Y g' / 'Z un'
-    Retorna: (filas_anexo, no_en_pl, col_cantidad_header)
-    """
     sufijo_map   = {'kg': 'kg',       'g': 'g',       'un': 'un'}
     col_map      = {'kg': 'Cantidad en KG', 'g': 'Cantidad en gramos', 'un': 'Cantidad en unidades'}
     nombre_pres  = {'kg': 'kilos',    'g': 'gramos',  'un': 'unidades'}
@@ -711,7 +639,6 @@ def procesar_muestras(items_pl, items_mail):
     codigos_si = {cod for cod, it in mail_dict.items() if it['anmat']}
     codigos_pl = {it['material'] for it in items_pl}
 
-    # Primero determinar qué tipos de cantidad existen en los ítems con ANMAT=Sí
     tipos_global = set()
     for item in items_pl:
         if item['material'] in codigos_si:
@@ -731,7 +658,6 @@ def procesar_muestras(items_pl, items_mail):
         cantidades = item['cantidades']
         tipos_item = [t for t in ('kg', 'g', 'un') if t in cantidades]
 
-        # Presentación
         if len(tipos_item) == 0:
             presentacion = ''
             cantidad_val = ''
@@ -740,13 +666,10 @@ def procesar_muestras(items_pl, items_mail):
             presentacion = nombre_pres[t]
             v = cantidades[t]
             if un_solo_tipo:
-                # Columna ya dice la unidad → valor numérico solo
                 cantidad_val = int(v) if v == int(v) else v
             else:
-                # Mezcla global → valor con sufijo
                 cantidad_val = f"{int(v) if v == int(v) else v} {sufijo_map[t]}"
         else:
-            # Múltiples tipos en este ítem
             presentacion = ' / '.join(nombre_pres[t] for t in tipos_item)
             partes = []
             for t in tipos_item:
@@ -780,10 +703,6 @@ def procesar_muestras(items_pl, items_mail):
     return filas, no_en_pl, col_cantidad_header
 
 
-# ─────────────────────────────────────────
-# FUNCIONES DE SALIDA (compartidas)
-# ─────────────────────────────────────────
-
 COLUMNAS_SALIDA = ['MATERIAL', 'descripcion_factura', 'Marca y Nombre del producto',
                    'Variedades', 'Presentación', 'Cantidad', 'N° de inscripcion',
                    'Lote', 'Fecha de vencimiento', 'Origen', 'Fabricante', 'Posición Arancelaria']
@@ -809,7 +728,6 @@ def escribir_excel_bytes(filas, incluir_primeras_cols=True, col_cantidad_header=
 
     header_fill = PatternFill('solid', start_color='70AD47')
     for col_idx, col_name in enumerate(columnas, 1):
-        # Renombrar columna Cantidad según el tipo detectado
         display_name = col_cantidad_header if col_name == 'Cantidad' else col_name
         cell = ws.cell(row=2, column=col_idx, value=display_name)
         cell.font = Font(name='Arial', bold=True, size=11, color='FFFFFF')
@@ -821,13 +739,11 @@ def escribir_excel_bytes(filas, incluir_primeras_cols=True, col_cantidad_header=
         tiene_alerta = len(fila.get('_alertas', [])) > 0 or fila.get('_necesita_completar', False)
         for col_idx, col_name in enumerate(columnas, 1):
             val = fila.get(col_name, '')
-            # MATERIAL como número entero
             if col_name == 'MATERIAL' and val != '':
                 try:
                     val = int(float(str(val)))
                 except:
                     pass
-            # Cantidad: número si es puro, string si tiene unidades mezcladas
             if col_name == 'Cantidad' and val != '':
                 if not isinstance(val, str):
                     try:
@@ -844,7 +760,6 @@ def escribir_excel_bytes(filas, incluir_primeras_cols=True, col_cantidad_header=
     for col_idx, col_name in enumerate(columnas, 1):
         ws.column_dimensions[get_column_letter(col_idx)].width = ANCHOS.get(col_name, 15)
 
-    # Altura fija suficiente para headers y datos
     ws.row_dimensions[1].height = 22
     ws.row_dimensions[2].height = 40
     ws.freeze_panes = 'A3'
@@ -951,11 +866,8 @@ def generar_zip(grupos, invoice, col_cantidad_header='Cantidad'):
     buf.seek(0)
     return buf.getvalue()
 
-# ─────────────────────────────────────────
 # SESSION STATE
-# ─────────────────────────────────────────
 defaults = {
-    # operación normal
     'filas_procesadas':        None,
     'alertas_excluir':         [],
     'alertas_avon':            [],
@@ -963,7 +875,6 @@ defaults = {
     'invoice':                 None,
     'excluidos':               set(),
     'datos_avon_completados':  {},
-    # muestras
     'filas_muestras':          None,
     'invoice_muestras':        None,
     'alertas_muestras':        [],
@@ -973,9 +884,7 @@ for k, v in defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
-# ─────────────────────────────────────────
 # PASO 0: SELECCIÓN DE MODO
-# ─────────────────────────────────────────
 st.markdown('<div class="card"><h3><span class="step-badge">0</span>Tipo de operación</h3>', unsafe_allow_html=True)
 modo = st.radio(
     "¿Qué tipo de operación es?",
@@ -992,7 +901,6 @@ if modo == "Muestras Natura":
 
     st.markdown('<div class="modo-muestras">🧪 Modo Muestras Natura — se generará el Anexo solo para los ítems con ANMAT = Sí del mail de clasificación. NCM, origen y fabricante se toman automáticamente.</div>', unsafe_allow_html=True)
 
-    # ── Paso 1: Archivos ──
     st.markdown('<div class="card"><h3><span class="step-badge">1</span>Archivos de la operación</h3>', unsafe_allow_html=True)
     st.markdown("**📌 Número de referencia de la operación**")
     nro_ref_m = st.text_input("", placeholder="ej: MN014-26", label_visibility="collapsed", key='nro_ref_muestras')
@@ -1004,7 +912,6 @@ if modo == "Muestras Natura":
         f_msg  = st.file_uploader("📧 Mail de clasificación ANMAT (.msg)", type=['msg'], key='msg_muestras')
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # ── Paso 2: Procesar ──
     if f_pl_m and f_msg:
         st.markdown('<div class="card"><h3><span class="step-badge">2</span>Procesar</h3>', unsafe_allow_html=True)
         if st.button("⚙️ Analizar y procesar muestras", key='btn_procesar_muestras'):
@@ -1037,7 +944,6 @@ if modo == "Muestras Natura":
                     st.text(traceback.format_exc())
         st.markdown('</div>', unsafe_allow_html=True)
 
-    # ── Paso 3: Resultados ──
     if st.session_state.filas_muestras is not None:
         filas_m   = st.session_state.filas_muestras
         invoice_m = st.session_state.invoice_muestras
@@ -1062,7 +968,6 @@ if modo == "Muestras Natura":
             st.dataframe(pd.DataFrame([{c: f.get(c,'') for c in cols_preview} for f in filas_m]),
                          use_container_width=True)
 
-        # ── Paso 4: Generar ──
         st.markdown('<div class="card"><h3><span class="step-badge">4</span>Generar Anexo de Muestras</h3>', unsafe_allow_html=True)
         if st.button("📄 Generar Anexo de Muestras", key='btn_generar_muestras'):
             with st.spinner('Generando archivos...'):
@@ -1080,13 +985,11 @@ if modo == "Muestras Natura":
                 )
         st.markdown('</div>', unsafe_allow_html=True)
 
-
 # ═══════════════════════════════════════════════════════════
 # RAMA B: OPERACIÓN NORMAL
 # ═══════════════════════════════════════════════════════════
 else:
 
-    # ── Paso 1: Archivos ──
     st.markdown('<div class="card"><h3><span class="step-badge">1</span>Archivos de la operación</h3>', unsafe_allow_html=True)
     st.markdown("**📌 Número de referencia de la operación**")
     nro_referencia = st.text_input("", placeholder="ej: 4550595912", label_visibility="collapsed")
@@ -1104,7 +1007,6 @@ else:
 
     archivos_ok = all([f_pl, f_prox, f_anmat, f_avon, f_fab, f_ncm])
 
-    # ── Paso 2: Procesar ──
     if archivos_ok:
         st.markdown('<div class="card"><h3><span class="step-badge">2</span>Procesar operación</h3>', unsafe_allow_html=True)
         if st.button("⚙️ Analizar y procesar", key='btn_procesar'):
@@ -1134,7 +1036,6 @@ else:
                     st.error(f"Error al procesar: {e}")
         st.markdown('</div>', unsafe_allow_html=True)
 
-    # ── Paso 3: Alertas y resolución ──
     if st.session_state.filas_procesadas is not None:
         filas   = st.session_state.filas_procesadas
         invoice = st.session_state.invoice
@@ -1156,7 +1057,6 @@ else:
 
         st.markdown('<br>', unsafe_allow_html=True)
 
-        # Registros con múltiples coincidencias
         filas_multi = [f for f in st.session_state.filas_procesadas if f.get('_multi_opciones')]
         if filas_multi:
             grupos_multi = {}
@@ -1187,7 +1087,6 @@ else:
                             st.rerun()
             st.markdown('</div>', unsafe_allow_html=True)
 
-        # Vencimientos
         alertas_venc = [f for f in st.session_state.filas_procesadas if f.get('_vencimiento') in ('vencido','proximo') and not f['_skip']]
         if alertas_venc:
             st.markdown('<div class="card"><h3>⏰ Alertas de vencimiento</h3>', unsafe_allow_html=True)
@@ -1208,7 +1107,6 @@ else:
                         st.rerun()
             st.markdown('</div>', unsafe_allow_html=True)
 
-        # No encontrados
         if st.session_state.alertas_excluir:
             st.markdown('<div class="card"><h3>⚠️ No encontrados en ANMAT ni Avon — ¿excluir del anexo?</h3>', unsafe_allow_html=True)
             for idx_excl, item in enumerate(st.session_state.alertas_excluir):
@@ -1222,7 +1120,6 @@ else:
                         st.rerun()
             st.markdown('</div>', unsafe_allow_html=True)
 
-        # Avon
         if st.session_state.alertas_avon:
             st.markdown('<div class="card"><h3>🌸 Ítems Avon — completar Fabricante y Origen</h3>', unsafe_allow_html=True)
             for item in st.session_state.alertas_avon:
@@ -1237,13 +1134,11 @@ else:
                     st.session_state.datos_avon_completados[mat] = {'fabricante': fab_val, 'origen': orig_val, 'variedad': var_val}
             st.markdown('</div>', unsafe_allow_html=True)
 
-        # Alertas generales
         if st.session_state.alertas_generales:
             with st.expander(f"⚠️ {len(st.session_state.alertas_generales)} alertas adicionales"):
                 for a in st.session_state.alertas_generales:
                     st.markdown(f'<div class="alert-box">{a}</div>', unsafe_allow_html=True)
 
-        # ── Paso 4: Generar ──
         st.markdown('<div class="card"><h3><span class="step-badge">4</span>Generar Anexo</h3>', unsafe_allow_html=True)
         if st.button("📄 Generar Anexo completo", key='btn_generar'):
             with st.spinner('Generando archivos...'):
@@ -1274,8 +1169,8 @@ else:
                         if datos.get('variedad'):   f['Variedades'] = datos['variedad']
                     filas_final.append(f)
 
-                principal, difusor, kit3x1, _ = separar_anexos(filas_final)
-                grupos    = [('PRINCIPAL', principal), ('DIFUSOR', difusor), ('3x1', kit3x1)]
+                principal, difusor, muestras, _ = separar_anexos(filas_final)
+                grupos    = [('PRINCIPAL', principal), ('DIFUSOR', difusor), ('MUESTRAS', muestras)]
                 ref       = nro_referencia.strip() if nro_referencia.strip() else invoice
                 zip_bytes = generar_zip(grupos, ref)
 
