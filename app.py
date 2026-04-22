@@ -568,13 +568,14 @@ def procesar_pl(pl, df_anmat, df_avon, df_prox, df_fab, df_ncm):
                 fab, alerta_fab = buscar_fabricante('', mat_code, df_fab)
                 fila['Fabricante'] = fab if not alerta_fab else ''
 
+                avon_idx_actual = len(alertas_avon)
                 alertas_avon.append({
                     'material': mat_code,
                     'descripcion': descripcion_pl,
                     'fila_idx': len(filas),
-                    'avon_idx': len(alertas_avon),
+                    'avon_idx': avon_idx_actual,
                 })
-                fila['_fila_idx'] = len(alertas_avon)
+                fila['_avon_idx'] = avon_idx_actual
             else:
                 fila['_skip'] = True
                 alertas_excluir.append({
@@ -1361,11 +1362,9 @@ else:
                     else:
                         f = fila.copy()
                     if fila.get('_avon'):
-                        # Buscar por key_idx (material_fila_idx) o por material solo
-                        fila_idx = fila.get('_fila_idx', '')
-                        key_idx = f'{mat}_{fila_idx}'
-                        datos = st.session_state.datos_avon_completados.get(key_idx,
-                                st.session_state.datos_avon_completados.get(mat, {}))
+                        avon_idx = fila.get('_avon_idx', '')
+                        key_idx = f'{mat}_{avon_idx}'
+                        datos = st.session_state.datos_avon_completados.get(key_idx, {})
                         if datos.get('fabricante'): f['Fabricante'] = datos['fabricante']
                         if datos.get('origen'):     f['Origen']     = datos['origen']
                         if datos.get('variedad'):   f['Variedades'] = datos['variedad']
