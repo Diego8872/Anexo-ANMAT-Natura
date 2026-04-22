@@ -571,8 +571,10 @@ def procesar_pl(pl, df_anmat, df_avon, df_prox, df_fab, df_ncm):
                 alertas_avon.append({
                     'material': mat_code,
                     'descripcion': descripcion_pl,
-                    'fila_idx': len(filas)
+                    'fila_idx': len(filas),
+                    'avon_idx': len(alertas_avon),
                 })
+                fila['_fila_idx'] = len(alertas_avon)
             else:
                 fila['_skip'] = True
                 alertas_excluir.append({
@@ -1311,46 +1313,23 @@ else:
 
         if st.session_state.alertas_avon:
             st.markdown('<div class="card"><h3>🌸 Ítems Avon — completar Fabricante, Origen y Variedad</h3>', unsafe_allow_html=True)
-            st.markdown('<p style="color:#666; font-size:0.85rem; margin-bottom:12px;">Completá los campos directamente en la tabla. Podés editar cada celda.</p>', unsafe_allow_html=True)
-
-            # Inicializar df editable en session_state solo la primera vez
-            if 'df_avon_editable' not in st.session_state or st.session_state.get('_avon_init_invoice') != invoice:
-                rows_avon = []
-                for item in st.session_state.alertas_avon:
-                    mat = item['material']
-                    rows_avon.append({
-                        'Material': mat,
-                        'Descripción': item['descripcion'],
-                        'Fabricante': '',
-                        'Origen': '',
-                        'Variedad': '',
-                    })
-                st.session_state.df_avon_editable = pd.DataFrame(rows_avon)
-                st.session_state._avon_init_invoice = invoice
-
-            edited = st.data_editor(
-                st.session_state.df_avon_editable,
-                column_config={
-                    'Material':    st.column_config.TextColumn('Material',    disabled=True, width='small'),
-                    'Descripción': st.column_config.TextColumn('Descripción', disabled=True, width='large'),
-                    'Fabricante':  st.column_config.TextColumn('Fabricante',  width='large'),
-                    'Origen':      st.column_config.TextColumn('Origen',      width='small'),
-                    'Variedad':    st.column_config.TextColumn('Variedad',    width='medium'),
-                },
-                hide_index=True,
-                use_container_width=True,
-                key='avon_editor'
-            )
-            # Persistir cambios en session_state
-            st.session_state.df_avon_editable = edited
-            st.session_state.datos_avon_completados = {
-                row['Material']: {
-                    'fabricante': row['Fabricante'],
-                    'origen':     row['Origen'],
-                    'variedad':   row['Variedad'],
+            for idx_avon, item in enumerate(st.session_state.alertas_avon):
+                mat = item['material']
+                key_idx = f'{mat}_{idx_avon}'
+                prev = st.session_state.datos_avon_completados.get(key_idx, {})
+                st.markdown(f'<div class="alert-box"><strong>{mat}</strong> — {item["descripcion"]}</div>', unsafe_allow_html=True)
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    fab_val = st.text_input("Fabricante", value=prev.get('fabricante', ''), key=f'fab_{key_idx}')
+                with c2:
+                    orig_val = st.text_input("Origen", value=prev.get('origen', ''), key=f'orig_{key_idx}')
+                with c3:
+                    var_val = st.text_input("Variedad", value=prev.get('variedad', ''), key=f'var_{key_idx}')
+                st.session_state.datos_avon_completados[key_idx] = {
+                    'fabricante': fab_val,
+                    'origen': orig_val,
+                    'variedad': var_val,
                 }
-                for _, row in edited.iterrows()
-            }
             st.markdown('</div>', unsafe_allow_html=True)
 
         if st.session_state.alertas_generales:
@@ -1381,8 +1360,12 @@ else:
                         continue
                     else:
                         f = fila.copy()
-                    if fila.get('_avon') and mat in st.session_state.datos_avon_completados:
-                        datos = st.session_state.datos_avon_completados[mat]
+                    if fila.get('_avon'):
+                        # Buscar por key_idx (material_fila_idx) o por material solo
+                        fila_idx = fila.get('_fila_idx', '')
+                        key_idx = f'{mat}_{fila_idx}'
+                        datos = st.session_state.datos_avon_completados.get(key_idx,
+                                st.session_state.datos_avon_completados.get(mat, {}))
                         if datos.get('fabricante'): f['Fabricante'] = datos['fabricante']
                         if datos.get('origen'):     f['Origen']     = datos['origen']
                         if datos.get('variedad'):   f['Variedades'] = datos['variedad']
