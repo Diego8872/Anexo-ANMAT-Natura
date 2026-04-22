@@ -1038,6 +1038,8 @@ defaults = {
     'excluidos':               set(),
     'alerta_origen_proveedor':  None,
     'datos_avon_completados':  {},
+    'df_avon_editable':        None,
+    '_avon_init_invoice':      None,
     'filas_muestras':          None,
     'invoice_muestras':        None,
     'alertas_muestras':        [],
@@ -1199,6 +1201,8 @@ else:
                     st.session_state.invoice                = invoice
                     st.session_state.excluidos              = set()
                     st.session_state.datos_avon_completados = {}
+                    st.session_state.df_avon_editable       = None
+                    st.session_state._avon_init_invoice     = None
 
                 except Exception as e:
                     st.error(f"Error al procesar: {e}")
@@ -1308,21 +1312,24 @@ else:
         if st.session_state.alertas_avon:
             st.markdown('<div class="card"><h3>🌸 Ítems Avon — completar Fabricante, Origen y Variedad</h3>', unsafe_allow_html=True)
             st.markdown('<p style="color:#666; font-size:0.85rem; margin-bottom:12px;">Completá los campos directamente en la tabla. Podés editar cada celda.</p>', unsafe_allow_html=True)
-            # Construir dataframe editable
-            rows_avon = []
-            for item in st.session_state.alertas_avon:
-                mat = item['material']
-                prev = st.session_state.datos_avon_completados.get(mat, {})
-                rows_avon.append({
-                    'Material': mat,
-                    'Descripción': item['descripcion'],
-                    'Fabricante': prev.get('fabricante', ''),
-                    'Origen': prev.get('origen', ''),
-                    'Variedad': prev.get('variedad', ''),
-                })
-            df_avon_edit = pd.DataFrame(rows_avon)
+
+            # Inicializar df editable en session_state solo la primera vez
+            if 'df_avon_editable' not in st.session_state or st.session_state.get('_avon_init_invoice') != invoice:
+                rows_avon = []
+                for item in st.session_state.alertas_avon:
+                    mat = item['material']
+                    rows_avon.append({
+                        'Material': mat,
+                        'Descripción': item['descripcion'],
+                        'Fabricante': '',
+                        'Origen': '',
+                        'Variedad': '',
+                    })
+                st.session_state.df_avon_editable = pd.DataFrame(rows_avon)
+                st.session_state._avon_init_invoice = invoice
+
             edited = st.data_editor(
-                df_avon_edit,
+                st.session_state.df_avon_editable,
                 column_config={
                     'Material':    st.column_config.TextColumn('Material',    disabled=True, width='small'),
                     'Descripción': st.column_config.TextColumn('Descripción', disabled=True, width='large'),
@@ -1334,14 +1341,16 @@ else:
                 use_container_width=True,
                 key='avon_editor'
             )
-            # Guardar cambios en session state
-            for _, row in edited.iterrows():
-                mat = row['Material']
-                st.session_state.datos_avon_completados[mat] = {
+            # Persistir cambios en session_state
+            st.session_state.df_avon_editable = edited
+            st.session_state.datos_avon_completados = {
+                row['Material']: {
                     'fabricante': row['Fabricante'],
                     'origen':     row['Origen'],
                     'variedad':   row['Variedad'],
                 }
+                for _, row in edited.iterrows()
+            }
             st.markdown('</div>', unsafe_allow_html=True)
 
         if st.session_state.alertas_generales:
