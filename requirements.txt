@@ -6,3 +6,4 @@ pyxlsb
 xlrd
 reportlab
 extract-msg
+pdfplumber
