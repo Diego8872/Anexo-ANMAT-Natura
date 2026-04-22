@@ -138,16 +138,174 @@ def cargar_pl(file_bytes):
     pl = pd.concat(rows, ignore_index=True) if rows else pd.DataFrame()
     return pl, invoice
 
-def cargar_proximas(file_bytes):
-    with tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False) as f:
-        f.write(file_bytes)
-        tmp = f.name
-    df = pd.read_excel(tmp, header=0)
-    col_map = {c.strip().lower(): c for c in df.columns}
-    if 'material' in col_map:
-        df = df.rename(columns={col_map['material']: 'Material'})
+# Países conocidos para búsqueda en texto libre
+PAISES_CONOCIDOS = [
+    'brazil', 'brasil', 'colombia', 'china', 'argentina', 'mexico', 'méxico',
+    'peru', 'perú', 'chile', 'uruguay', 'paraguay', 'bolivia', 'ecuador',
+    'usa', 'united states', 'estados unidos', 'france', 'francia',
+    'germany', 'alemania', 'italy', 'italia', 'spain', 'españa',
+    'japan', 'japón', 'japon', 'korea', 'corea', 'india', 'taiwan',
+]
+
+PAIS_NORMALIZADO = {
+    'brazil': 'Brasil', 'brasil': 'Brasil',
+    'colombia': 'Colombia', 'china': 'China',
+    'argentina': 'Argentina', 'mexico': 'México', 'méxico': 'México',
+    'peru': 'Perú', 'perú': 'Perú', 'chile': 'Chile',
+    'uruguay': 'Uruguay', 'paraguay': 'Paraguay', 'bolivia': 'Bolivia',
+    'ecuador': 'Ecuador', 'usa': 'USA', 'united states': 'USA',
+    'estados unidos': 'USA', 'france': 'Francia', 'francia': 'Francia',
+    'germany': 'Alemania', 'alemania': 'Alemania', 'italy': 'Italia',
+    'italia': 'Italia', 'spain': 'España', 'españa': 'España',
+    'japan': 'Japón', 'japón': 'Japón', 'japon': 'Japón',
+    'korea': 'Korea', 'corea': 'Korea', 'india': 'India', 'taiwan': 'Taiwan',
+}
+
+def _extraer_pais_de_texto(texto):
+    """Busca un país conocido en un texto. Retorna nombre normalizado o None."""
+    t = texto.lower()
+    for p in PAISES_CONOCIDOS:
+        if p in t:
+            return PAIS_NORMALIZADO.get(p, p.capitalize())
+    return None
+
+def _parsear_pdf_proximas(file_bytes):
+    """
+    Extrae materiales y origen de un PDF de factura/PL.
+    Retorna: (df con columnas Material/Origen, origen_explicito bool, origen_proveedor str o None)
+    """
+    try:
+        import pdfplumber
+    except ImportError:
+        return None, False, None
+
+    texto_completo = ''
+    tablas = []
+    with pdfplumber.open(BytesIO(file_bytes)) as pdf:
+        for page in pdf.pages:
+            texto_completo += (page.extract_text() or '') + '\n'
+            t = page.extract_table()
+            if t:
+                tablas.append(t)
+
+    # ── Estrategia 1: País de origen explícito ──
+    patron_origen = [
+        r'country\s+of\s+origin\s*[:\-]\s*([A-Za-z\s]+)',
+        r'pa[ií]s\s+de\s+origen\s*[:\-]\s*([A-Za-z\s]+)',
+        r'origen\s*[:\-]\s*([A-Za-z\s]+)',
+        r'origin\s*[:\-]\s*([A-Za-z\s]+)',
+    ]
+    origen_explicito = None
+    for pat in patron_origen:
+        m = re.search(pat, texto_completo, re.IGNORECASE)
+        if m:
+            candidato = m.group(1).strip().split('\n')[0].strip()
+            pais = _extraer_pais_de_texto(candidato)
+            if pais:
+                origen_explicito = pais
+                break
+
+    # ── Estrategia 2: País del exportador/proveedor ──
+    origen_proveedor = None
+    patron_exportador = [
+        r'exporter\s*/\s*shipper\s*[:\-]?\s*(.+)',
+        r'exporter\s*[:\-]\s*(.+)',
+        r'shipper\s*[:\-]\s*(.+)',
+        r'exportador\s*[:\-]\s*(.+)',
+        r'proveedor\s*[:\-]\s*(.+)',
+    ]
+    for pat in patron_exportador:
+        m = re.search(pat, texto_completo, re.IGNORECASE)
+        if m:
+            linea = m.group(1).strip()
+            # Buscar en las siguientes 5 líneas también
+            idx = texto_completo.lower().find(linea.lower())
+            bloque = texto_completo[idx:idx+300] if idx >= 0 else linea
+            pais = _extraer_pais_de_texto(bloque)
+            if pais:
+                origen_proveedor = pais
+                break
+
+    # Si no encontramos proveedor por keyword, buscar país en dirección del emisor (primeras líneas)
+    if not origen_proveedor:
+        primeras_lineas = '\n'.join(texto_completo.split('\n')[:15])
+        origen_proveedor = _extraer_pais_de_texto(primeras_lineas)
+
+    # ── Extraer materiales de tablas ──
+    col_material_keywords = ['code', 'código', 'codigo', 'material', 'material code',
+                              'item', 'article', 'artículo', 'articulo', 'ref', 'sku']
+    col_origen_keywords = ['origen', 'origin', 'país', 'pais', 'country']
+
+    registros = []
+    origen_tabla = origen_explicito  # usar origen ya encontrado para todos los materiales
+
+    for tabla in tablas:
+        if not tabla or len(tabla) < 2:
+            continue
+        headers = [str(h).strip().lower() if h else '' for h in tabla[0]]
+
+        # Encontrar columna de material
+        col_mat_idx = None
+        for i, h in enumerate(headers):
+            if any(kw in h for kw in col_material_keywords):
+                col_mat_idx = i
+                break
+
+        # Encontrar columna de origen en tabla
+        col_orig_idx = None
+        for i, h in enumerate(headers):
+            if any(kw in h for kw in col_origen_keywords):
+                col_orig_idx = i
+                break
+
+        if col_mat_idx is None:
+            continue
+
+        for row in tabla[1:]:
+            if not row or col_mat_idx >= len(row):
+                continue
+            val = str(row[col_mat_idx]).strip() if row[col_mat_idx] else ''
+            # Solo códigos numéricos de 5+ dígitos
+            if re.match(r'^\d{5,}', val):
+                orig = origen_tabla
+                if col_orig_idx is not None and col_orig_idx < len(row):
+                    orig_cell = str(row[col_orig_idx]).strip()
+                    p = _extraer_pais_de_texto(orig_cell)
+                    if p:
+                        orig = p
+                registros.append({'Material': val, 'Origen': orig or ''})
+
+    # Si no hay tabla pero hay texto, buscar códigos numéricos en el texto
+    if not registros:
+        codigos = re.findall(r'(\d{5,8})', texto_completo)
+        for cod in set(codigos):
+            registros.append({'Material': cod, 'Origen': origen_tabla or ''})
+
+    if not registros:
+        return None, origen_explicito is not None, origen_proveedor
+
+    df = pd.DataFrame(registros)
     df['Material'] = df['Material'].astype(str).str.strip()
-    return df
+    return df, origen_explicito is not None, origen_proveedor
+
+
+def cargar_proximas(file_bytes, filename=''):
+    """Carga Próximas Importaciones desde Excel o PDF."""
+    es_pdf = filename.lower().endswith('.pdf')
+
+    if es_pdf:
+        df, origen_explicito, origen_proveedor = _parsear_pdf_proximas(file_bytes)
+        return df, es_pdf, origen_explicito, origen_proveedor
+    else:
+        with tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False) as f:
+            f.write(file_bytes)
+            tmp = f.name
+        df = pd.read_excel(tmp, header=0)
+        col_map = {c.strip().lower(): c for c in df.columns}
+        if 'material' in col_map:
+            df = df.rename(columns={col_map['material']: 'Material'})
+        df['Material'] = df['Material'].astype(str).str.strip()
+        return df, False, True, None
 
 def buscar_anmat(mat_code, df_anmat):
     found = df_anmat[df_anmat['CM'] == str(mat_code)]
@@ -195,10 +353,14 @@ def buscar_ncm(mat_code, df_ncm):
     return found.iloc[0]['NCM'], None
 
 def verificar_origen_proximas(origen_anmat, mat_code, df_prox):
+    if df_prox is None:
+        return None, f"Material {mat_code}: no se pudo leer Próximas Importaciones"
     prox_row = df_prox[df_prox['Material'] == str(mat_code)]
     if len(prox_row) == 0:
         return None, f"Material {mat_code} no encontrado en Próximas Importaciones"
     origen_prox = str(prox_row.iloc[0]['Origen'])
+    if not origen_prox or origen_prox == 'nan':
+        return None, f"Material {mat_code}: origen vacío en Próximas Importaciones"
     pais_anmat = normalizar_pais(origen_anmat)
     pais_prox = normalizar_pais(origen_prox)
     if pais_anmat != pais_prox:
@@ -874,6 +1036,7 @@ defaults = {
     'alertas_generales':       [],
     'invoice':                 None,
     'excluidos':               set(),
+    'alerta_origen_proveedor':  None,
     'datos_avon_completados':  {},
     'filas_muestras':          None,
     'invoice_muestras':        None,
@@ -997,7 +1160,7 @@ else:
     col1, col2 = st.columns(2)
     with col1:
         f_pl    = st.file_uploader("📦 Packing List",                  type=['xlsx'],        key='pl')
-        f_prox  = st.file_uploader("📅 Próximas Importaciones",        type=['xlsx'],        key='prox')
+        f_prox  = st.file_uploader("📅 Próximas Importaciones",        type=['xlsx', 'pdf'], key='prox')
         f_anmat = st.file_uploader("🏥 Registro ANMAT Histórico",      type=['xlsb','xlsx'], key='anmat')
     with col2:
         f_avon  = st.file_uploader("🌸 Registros Avon",               type=['xlsx'],        key='avon')
@@ -1014,7 +1177,12 @@ else:
                 try:
                     suffix_fab = '.xls' if f_fab.name.endswith('.xls') else '.xlsx'
                     pl, invoice        = cargar_pl(f_pl.read())
-                    df_prox            = cargar_proximas(f_prox.read())
+                    df_prox, es_pdf_prox, origen_explicito_prox, origen_proveedor_prox = cargar_proximas(f_prox.read(), f_prox.name)
+                    # Si PDF sin origen explícito → guardar alerta para mostrar al usuario
+                    if es_pdf_prox and not origen_explicito_prox and origen_proveedor_prox:
+                        st.session_state.alerta_origen_proveedor = origen_proveedor_prox
+                    else:
+                        st.session_state.alerta_origen_proveedor = None
                     df_anmat           = cargar_anmat(f_anmat.read())
                     df_avon            = cargar_avon(f_avon.read())
                     df_fab             = cargar_fabricantes(f_fab.read(), suffix=suffix_fab)
@@ -1056,6 +1224,23 @@ else:
             st.markdown(f'<div class="stat-card"><div class="number" style="color:#ff6b6b">{skip}</div><div class="label">No encontrados</div></div>', unsafe_allow_html=True)
 
         st.markdown('<br>', unsafe_allow_html=True)
+
+        # ── Alerta origen proveedor (PDF sin origen explícito) ──
+        if st.session_state.get('alerta_origen_proveedor'):
+            prov = st.session_state.alerta_origen_proveedor
+            st.markdown('<div class="card"><h3>⚠️ Origen no encontrado explícitamente en Próximas Importaciones</h3>', unsafe_allow_html=True)
+            st.markdown(f'<div class="alert-box">No se encontró "Country of origin" u origen explícito en el PDF. Se detectó <strong>{prov}</strong> como país del proveedor/exportador. ¿Confirmás que el origen es <strong>{prov}</strong>?</div>', unsafe_allow_html=True)
+            col_conf1, col_conf2 = st.columns([1, 1])
+            with col_conf1:
+                if st.button(f"✅ Confirmar origen: {prov}", key='confirmar_origen_prov'):
+                    st.session_state.alerta_origen_proveedor = None
+                    st.rerun()
+            with col_conf2:
+                origen_manual = st.text_input("O ingresá el origen correcto:", key='origen_manual_prov')
+                if origen_manual and st.button("Usar este origen", key='usar_origen_manual'):
+                    st.session_state.alerta_origen_proveedor = None
+                    st.rerun()
+            st.markdown('</div>', unsafe_allow_html=True)
 
         filas_multi = [f for f in st.session_state.filas_procesadas if f.get('_multi_opciones')]
         if filas_multi:
@@ -1121,17 +1306,42 @@ else:
             st.markdown('</div>', unsafe_allow_html=True)
 
         if st.session_state.alertas_avon:
-            st.markdown('<div class="card"><h3>🌸 Ítems Avon — completar Fabricante y Origen</h3>', unsafe_allow_html=True)
+            st.markdown('<div class="card"><h3>🌸 Ítems Avon — completar Fabricante, Origen y Variedad</h3>', unsafe_allow_html=True)
+            st.markdown('<p style="color:#666; font-size:0.85rem; margin-bottom:12px;">Completá los campos directamente en la tabla. Podés editar cada celda.</p>', unsafe_allow_html=True)
+            # Construir dataframe editable
+            rows_avon = []
             for item in st.session_state.alertas_avon:
-                mat  = item['material']
-                st.markdown(f'<div class="alert-box"><strong>{mat}</strong> — {item["descripcion"]}</div>', unsafe_allow_html=True)
+                mat = item['material']
                 prev = st.session_state.datos_avon_completados.get(mat, {})
-                c1, c2, c3 = st.columns(3)
-                with c1: fab_val = st.text_input("Fabricante", value=prev.get('fabricante',''), key=f'fab_{mat}')
-                with c2: orig_val= st.text_input("Origen",     value=prev.get('origen',''),     key=f'orig_{mat}')
-                with c3: var_val = st.text_input("Variedad",   value=prev.get('variedad',''),   key=f'var_{mat}')
-                if fab_val or orig_val or var_val:
-                    st.session_state.datos_avon_completados[mat] = {'fabricante': fab_val, 'origen': orig_val, 'variedad': var_val}
+                rows_avon.append({
+                    'Material': mat,
+                    'Descripción': item['descripcion'],
+                    'Fabricante': prev.get('fabricante', ''),
+                    'Origen': prev.get('origen', ''),
+                    'Variedad': prev.get('variedad', ''),
+                })
+            df_avon_edit = pd.DataFrame(rows_avon)
+            edited = st.data_editor(
+                df_avon_edit,
+                column_config={
+                    'Material':    st.column_config.TextColumn('Material',    disabled=True, width='small'),
+                    'Descripción': st.column_config.TextColumn('Descripción', disabled=True, width='large'),
+                    'Fabricante':  st.column_config.TextColumn('Fabricante',  width='large'),
+                    'Origen':      st.column_config.TextColumn('Origen',      width='small'),
+                    'Variedad':    st.column_config.TextColumn('Variedad',    width='medium'),
+                },
+                hide_index=True,
+                use_container_width=True,
+                key='avon_editor'
+            )
+            # Guardar cambios en session state
+            for _, row in edited.iterrows():
+                mat = row['Material']
+                st.session_state.datos_avon_completados[mat] = {
+                    'fabricante': row['Fabricante'],
+                    'origen':     row['Origen'],
+                    'variedad':   row['Variedad'],
+                }
             st.markdown('</div>', unsafe_allow_html=True)
 
         if st.session_state.alertas_generales:
