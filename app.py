@@ -1644,10 +1644,30 @@ else:
                 grupos    = [('PRINCIPAL', principal), ('DIFUSOR', difusor), ('MUESTRAS', muestras)]
                 ref       = nro_referencia.strip() if nro_referencia.strip() else invoice
 
-                # Rotulado
-                mats_rotulado = st.session_state.get('materiales_rotulado', []) if st.session_state.get('rotulado_activo') else None
+                # Rotulado: calcular qué materiales con rotulado caen en cada grupo
+                mats_rotulado_global = list(st.session_state.get('materiales_rotulado', [])) if st.session_state.get('rotulado_activo') else []
 
-                zip_bytes = generar_zip(grupos, ref, materiales_rotulado=mats_rotulado or None)
+                buf_zip = BytesIO()
+                with zipfile.ZipFile(buf_zip, 'w', zipfile.ZIP_DEFLATED) as zf:
+                    for nombre_grupo, filas_grupo in grupos:
+                        if not filas_grupo:
+                            continue
+                        # Filtrar materiales rotulados que están en este grupo
+                        mats_en_grupo = {str(f.get('MATERIAL', '')) for f in filas_grupo}
+                        mats_rot_grupo = [m for m in mats_rotulado_global if str(m) in mats_en_grupo] or None
+
+                        nombre_base = f'ANEXO_{nombre_grupo}_{ref}'
+                        xls_completo = escribir_excel_bytes(filas_grupo, incluir_primeras_cols=True,
+                                                            materiales_rotulado=mats_rot_grupo)
+                        zf.writestr(f'{nombre_base}.xlsx', xls_completo)
+                        xls_sin = escribir_excel_bytes(filas_grupo, incluir_primeras_cols=False,
+                                                       materiales_rotulado=mats_rot_grupo)
+                        zf.writestr(f'{nombre_base}_SIN_MAT.xlsx', xls_sin)
+                        pdf = excel_a_pdf_bytes(xls_sin, f'{nombre_base}_SIN_MAT')
+                        if pdf:
+                            zf.writestr(f'{nombre_base}_SIN_MAT.pdf', pdf)
+                buf_zip.seek(0)
+                zip_bytes = buf_zip.getvalue()
 
                 st.markdown('<div class="success-box">✅ Anexo generado correctamente</div>', unsafe_allow_html=True)
                 resumen = [f"**{n}**: {len(fg)} ítems" for n, fg in grupos if fg]
