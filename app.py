@@ -1264,6 +1264,15 @@ else:
     st.markdown("**📌 Número de referencia de la operación**")
     nro_referencia = st.text_input("", placeholder="ej: 4550595912", label_visibility="collapsed")
 
+    st.markdown("**🏷️ Rotulado**")
+    rotulado_opcion = st.radio(
+        "¿Algún artículo tiene rotulado?",
+        options=["No", "Sí"],
+        horizontal=True,
+        key='rotulado_radio'
+    )
+    st.session_state.rotulado_activo = (rotulado_opcion == "Sí")
+
     col1, col2 = st.columns(2)
     with col1:
         f_pl    = st.file_uploader("📦 Packing List",                  type=['xlsx'],        key='pl')
@@ -1547,39 +1556,28 @@ else:
                     st.markdown(f'<div class="alert-box">{a}</div>', unsafe_allow_html=True)
 
         # ══════════════════════════════════════════════════════
-        # SECCIÓN: Rotulado
+        # SECCIÓN: Rotulado — multiselect post-proceso si Sí
         # ══════════════════════════════════════════════════════
-        st.markdown('<div class="card"><h3><span class="step-badge">3</span>Rotulado</h3>', unsafe_allow_html=True)
-
-        rotulado_opcion = st.radio(
-            "¿Algún artículo tiene rotulado?",
-            options=["No", "Sí"],
-            horizontal=True,
-            key='rotulado_radio'
-        )
-        rotulado_activo = rotulado_opcion == "Sí"
-        st.session_state.rotulado_activo = rotulado_activo
-
-        materiales_rotulado_final = []
-        if rotulado_activo:
-            # Obtener materiales disponibles (los que van a salir en el anexo)
+        if st.session_state.get('rotulado_activo'):
+            st.markdown('<div class="card"><h3>🏷️ Rotulado — seleccioná los materiales</h3>', unsafe_allow_html=True)
             mats_disponibles = []
             for fila in st.session_state.filas_procesadas:
                 mat_f = fila.get('MATERIAL', '')
                 if mat_f and mat_f not in st.session_state.excluidos and not fila.get('_skip'):
                     if mat_f not in mats_disponibles:
                         mats_disponibles.append(mat_f)
-
+            for mat_eq, eq_data in st.session_state.equivalentes.items():
+                if eq_data.get('datos') is not None and mat_eq not in st.session_state.excluidos:
+                    if mat_eq not in mats_disponibles:
+                        mats_disponibles.append(mat_eq)
             if mats_disponibles:
                 mats_seleccionados = st.multiselect(
                     "Seleccioná los materiales con rotulado:",
                     options=mats_disponibles,
-                    default=st.session_state.get('materiales_rotulado', []),
+                    default=[m for m in st.session_state.get('materiales_rotulado', []) if m in mats_disponibles],
                     key='multiselect_rotulado'
                 )
                 st.session_state.materiales_rotulado = mats_seleccionados
-                materiales_rotulado_final = mats_seleccionados
-
                 if mats_seleccionados:
                     mats_str = ', '.join(str(m) for m in mats_seleccionados)
                     st.markdown(
@@ -1588,14 +1586,13 @@ else:
                         unsafe_allow_html=True
                     )
             else:
-                st.info("No hay materiales disponibles para seleccionar.")
-
-        st.markdown('</div>', unsafe_allow_html=True)
+                st.info("Procesá la operación primero para seleccionar materiales.")
+            st.markdown('</div>', unsafe_allow_html=True)
 
         # ══════════════════════════════════════════════════════
         # SECCIÓN: Generar Anexo
         # ══════════════════════════════════════════════════════
-        st.markdown('<div class="card"><h3><span class="step-badge">4</span>Generar Anexo</h3>', unsafe_allow_html=True)
+        st.markdown('<div class="card"><h3><span class="step-badge">3</span>Generar Anexo</h3>', unsafe_allow_html=True)
         if st.button("📄 Generar Anexo completo", key='btn_generar'):
             with st.spinner('Generando archivos...'):
                 incluidos_multi = st.session_state.get('incluidos_multi', set())
