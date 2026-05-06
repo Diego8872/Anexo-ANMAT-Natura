@@ -343,14 +343,28 @@ def buscar_anmat(mat_code, df_anmat):
         found = found.sort_values('Fecha Admision', ascending=False)
     return found.iloc[0]
 
+def _col_avon(df, variantes):
+    """Busca el nombre real de una columna entre variantes posibles (strip + lower)."""
+    cols_norm = {c.strip().lower().replace(' ', '').replace('/', ''): c for c in df.columns}
+    for v in variantes:
+        key = v.strip().lower().replace(' ', '').replace('/', '')
+        if key in cols_norm:
+            return cols_norm[key]
+    return None
+
 def buscar_avon(mat_code, df_avon):
     mat_str = str(mat_code).strip()
-    col_cm = 'CM / ZPAC'
-    col_fi = 'FI Code Local'
-    found = df_avon[df_avon[col_cm].astype(str).str.strip() == mat_str]
-    if len(found) == 0:
+    col_cm = _col_avon(df_avon, ['CM / ZPAC', 'CM/ZPAC', 'CM/ ZPAC', 'CM /ZPAC'])
+    col_fi = _col_avon(df_avon, ['FI Code Local', 'FI Code', 'FICodeLocal'])
+    if col_cm:
+        found = df_avon[df_avon[col_cm].astype(str).str.strip() == mat_str]
+        if len(found) > 0:
+            return found.iloc[0]
+    if col_fi:
         found = df_avon[df_avon[col_fi].astype(str).str.strip() == mat_str]
-    return found.iloc[0] if len(found) > 0 else None
+        if len(found) > 0:
+            return found.iloc[0]
+    return None
 
 def buscar_fabricante(origen_str, mat_code, df_fab):
     origen = str(origen_str).strip()
@@ -630,13 +644,34 @@ def procesar_pl(pl, df_anmat, df_avon, df_prox, df_fab, df_ncm):
             avon_row = buscar_avon(mat_code, df_avon)
             if avon_row is not None:
                 fila['_avon'] = True
-                cm_zpac = str(avon_row.get('CM / ZPAC', '')).strip()
-                fi_code = str(avon_row.get('FI Code Local', '')).strip()
+                # Buscar columnas con nombres flexibles
+                def _get_avon(row, variantes, default=''):
+                    for v in variantes:
+                        val = row.get(v)
+                        if val is not None:
+                            return str(val).strip()
+                    # Búsqueda normalizada
+                    for k in row.index:
+                        k_norm = str(k).strip().lower().replace(' ', '').replace('/', '').replace('\n', '')
+                        for v in variantes:
+                            v_norm = v.strip().lower().replace(' ', '').replace('/', '').replace('\n', '')
+                            if k_norm == v_norm:
+                                return str(row[k]).strip()
+                    return default
+
+                cm_zpac = _get_avon(avon_row, ['CM / ZPAC', 'CM/ZPAC', ' CM/ZPAC', 'CM/ ZPAC'])
+                fi_code = _get_avon(avon_row, ['FI Code Local', 'FI Code', 'FICodeLocal'])
                 fila['MATERIAL'] = cm_zpac if cm_zpac and cm_zpac != 'nan' else fi_code
 
-                nombre_avon = str(avon_row.get('NOMBRE DE REGISTRO DE PRODUCTO', ''))
-                contenido_avon = str(avon_row.get('CONTENIDO LEGAL', ''))
-                registro_avon = str(avon_row.get('Reg. SP   (Trámite#)\nARGENTINA NATURA', ''))
+                nombre_avon = _get_avon(avon_row, ['NOMBRE DE REGISTRO DE PRODUCTO', 'NOMBRE REGISTRO', 'NOMBRE'])
+                contenido_avon = _get_avon(avon_row, ['CONTENIDO LEGAL', 'CONTENIDO'])
+                registro_avon = _get_avon(avon_row, [
+                    'Reg. SP   (Trámite#)\nARGENTINA NATURA',
+                    'Reg. SP   (Trámite#)\nNATURA ARG',
+                    'Reg. SP (Trámite#)\nARGENTINA NATURA',
+                    'Reg. SP   (Tramite#)\nARGENTINA NATURA',
+                    'Reg. SP   (Trámite#)\nNATURA ARGENTINA',
+                ])
 
                 if 'REFIL' in descripcion_pl.upper():
                     nombre_avon = nombre_avon + ' (REPUESTO)'
