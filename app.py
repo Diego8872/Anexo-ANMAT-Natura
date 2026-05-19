@@ -176,12 +176,20 @@ def cargar_pl(file_bytes):
         # Detectar columnas clave por header
         col_qty_idx, col_desc_idx, col_lote_idx, col_fecha_idx = 2, 3, 5, 6
         lote_encontrado = False
+        qty_encontrado = False
         for idx, h in enumerate(header_vals):
-            if any(k in h for k in ['QUANTITY', 'CANTIDAD', 'QTY']) and idx not in [0,1]:
+            if idx in [0, 1]:
+                continue
+            # Cantidad: excluir BOXES, tomar QUANTITY PC primero
+            if not qty_encontrado and any(k in h for k in ['QUANTITY PC', 'QUANTITY', 'CANTIDAD']) and 'BOX' not in h:
                 col_qty_idx = idx
-            if any(k in h for k in ['DESCRIPTION', 'DESCRIP']) and idx not in [0,1]:
+                qty_encontrado = True
+            if any(k in h for k in ['DESCRIPTION', 'DESCRIP']):
                 col_desc_idx = idx
-            if any(k in h for k in ['LOT PRODUCT', 'LOT\nPRODUCT']) and not lote_encontrado:
+            if 'LOT PRODUCT' in h and not lote_encontrado:
+                col_lote_idx = idx
+                lote_encontrado = True
+            elif any(k in h for k in ['LOT', 'LOTE']) and 'SUPPLIER' not in h and 'BOX' not in h and not lote_encontrado:
                 col_lote_idx = idx
                 lote_encontrado = True
             if any(k in h for k in ['EXPIRE', 'VENC', 'EXPIR']):
