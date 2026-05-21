@@ -118,9 +118,13 @@ def cargar_pl(file_bytes):
         df = pd.read_excel(tmp, sheet_name=sh, header=None)
         header_row = None
         for i, row in df.iterrows():
-            # Normalizar valores de la fila para comparar (reemplaza saltos de línea)
             row_str = ' '.join(str(v).replace('\n', ' ').upper() for v in row.values if pd.notna(v))
-            if 'MATERIAL CODE' in row_str or 'MATERIAL\nCODE' in str(row.values):
+            vals_upper = [str(v).replace('\n', ' ').strip().upper() for v in row.values if pd.notna(v)]
+            # Detectar fila de header por palabras clave conocidas
+            if ('MATERIAL CODE' in row_str or 'MATERIAL\nCODE' in str(row.values)
+                    or ('CODE' in vals_upper and any(k in row_str for k in ['PRODUCT', 'LOT', 'DESCRIPTION', 'DESCRIPCION', 'PACKING']))
+                    or ('CODIGO' in row_str and any(k in row_str for k in ['DESCRIPCION', 'LOTE', 'CANTIDAD']))
+                    or ('MATERIAL' in vals_upper and any(k in row_str for k in ['DESCRIPTION', 'LOT', 'QUANTITY']))):
                 header_row = i
                 break
         if header_row is None:
@@ -177,22 +181,37 @@ def cargar_pl(file_bytes):
         col_qty_idx, col_desc_idx, col_lote_idx, col_fecha_idx = 2, 3, 5, 6
         lote_encontrado = False
         qty_encontrado = False
+        # Detectar columna de material por header (para PLs sin MATERIAL CODE en posición 1)
+        col_mat_by_header = None
+        for idx, h in enumerate(header_vals):
+            if h in ('CODE', 'CÓDIGO', 'CODIGO', 'MATERIAL CODE', 'MATERIAL\nCODE'):
+                col_mat_by_header = idx
+                break
+        if col_mat_by_header is not None and col_mat_by_header != col_mat:
+            # Redetectar col_mat usando el header
+            muestra = data[col_mat_by_header].dropna().astype(str) if col_mat_by_header in data.columns else pd.Series()
+            if muestra.str.match(r'^\d{5,}').sum() > 0:
+                col_mat = col_mat_by_header
+
         for idx, h in enumerate(header_vals):
             if idx in [0, 1]:
                 continue
-            # Cantidad: excluir BOXES, tomar QUANTITY PC primero
-            if not qty_encontrado and any(k in h for k in ['QUANTITY PC', 'QUANTITY', 'CANTIDAD']) and 'BOX' not in h:
+            # Cantidad: QUANTITY PC / QUANTITY / CANTIDAD / PCS (excluir BOXES y TOTAL)
+            if not qty_encontrado and any(k in h for k in ['QUANTITY PC', 'QUANTITY', 'CANTIDAD', 'PCS']) and 'BOX' not in h and 'TOTAL' not in h:
                 col_qty_idx = idx
                 qty_encontrado = True
-            if any(k in h for k in ['DESCRIPTION', 'DESCRIP']):
+            # Descripción
+            if any(k in h for k in ['DESCRIPTION', 'DESCRIP', 'PRODUCT NAME']):
                 col_desc_idx = idx
+            # Lote
             if 'LOT PRODUCT' in h and not lote_encontrado:
                 col_lote_idx = idx
                 lote_encontrado = True
-            elif any(k in h for k in ['LOT', 'LOTE']) and 'SUPPLIER' not in h and 'BOX' not in h and not lote_encontrado:
+            elif any(k in h for k in ['LOT NUMBER', 'LOT', 'LOTE']) and 'SUPPLIER' not in h and 'BOX' not in h and not lote_encontrado:
                 col_lote_idx = idx
                 lote_encontrado = True
-            if any(k in h for k in ['EXPIRE', 'VENC', 'EXPIR']):
+            # Fecha
+            if any(k in h for k in ['EXPIRE', 'VENC', 'EXPIR', 'EXPIRATION']):
                 col_fecha_idx = idx
 
         # Normalizar fechas datetime → MM/YYYY
