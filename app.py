@@ -164,34 +164,32 @@ def cargar_pl(file_bytes):
         data = df.iloc[data_start:].copy().reset_index(drop=True)
         data.columns = range(len(data.columns))
 
-        # Detectar columna de material (numérico 5+ dígitos)
-        col_mat = 1
-        for col_idx in range(min(4, len(data.columns))):
-            muestra = data[col_idx].dropna().astype(str)
-            if muestra.str.match(r'^\d{5,}').sum() > 0:
-                col_mat = col_idx
+        # Detectar columna de material: primero por header, luego por contenido numérico
+        col_mat = None
+        for idx, h in enumerate(header_vals):
+            if h in ('CODE', 'CÓDIGO', 'CODIGO', 'MATERIAL CODE', 'MATERIAL CODE'):
+                col_mat = idx
                 break
+            if 'MATERIAL CODE' in h or h == 'MATERIAL\nCODE':
+                col_mat = idx
+                break
+
+        if col_mat is None:
+            # Fallback: primera columna con códigos numéricos de 5+ dígitos
+            for col_idx in range(min(5, len(data.columns))):
+                muestra = data[col_idx].dropna().astype(str)
+                if muestra.str.match(r'^\d{5,}').sum() > 0:
+                    col_mat = col_idx
+                    break
+            if col_mat is None:
+                col_mat = 1
+
         data = data[data[col_mat].astype(str).str.match(r'^\d{5,}$')]
-        if col_mat != 1 and len(data) > 0:
-            cols = list(data.columns)
-            cols[1], cols[col_mat] = cols[col_mat], cols[1]
-            data = data[cols]
 
         # Detectar columnas clave por header
         col_qty_idx, col_desc_idx, col_lote_idx, col_fecha_idx = 2, 3, 5, 6
         lote_encontrado = False
         qty_encontrado = False
-        # Detectar columna de material por header (para PLs sin MATERIAL CODE en posición 1)
-        col_mat_by_header = None
-        for idx, h in enumerate(header_vals):
-            if h in ('CODE', 'CÓDIGO', 'CODIGO', 'MATERIAL CODE', 'MATERIAL\nCODE'):
-                col_mat_by_header = idx
-                break
-        if col_mat_by_header is not None and col_mat_by_header != col_mat:
-            # Redetectar col_mat usando el header
-            muestra = data[col_mat_by_header].dropna().astype(str) if col_mat_by_header in data.columns else pd.Series()
-            if muestra.str.match(r'^\d{5,}').sum() > 0:
-                col_mat = col_mat_by_header
 
         for idx, h in enumerate(header_vals):
             if idx in [0, 1]:
@@ -229,21 +227,20 @@ def cargar_pl(file_bytes):
                 return s
             data[col_fecha_idx] = data[col_fecha_idx].apply(normalizar_fecha)
 
-        # Reordenar a posiciones estándar si difieren
-        col_map_reorder = {2: col_qty_idx, 3: col_desc_idx, 5: col_lote_idx, 6: col_fecha_idx}
+        # Reordenar a posiciones estándar: 1=mat, 2=qty, 3=desc, 5=lote, 6=fecha
+        col_map_reorder = {1: col_mat, 2: col_qty_idx, 3: col_desc_idx, 5: col_lote_idx, 6: col_fecha_idx}
         if any(v != k for k, v in col_map_reorder.items()) and len(data) > 0:
-            data = data.rename(columns={
-                col_qty_idx: '_qty', col_desc_idx: '_desc',
-                col_lote_idx: '_lote', col_fecha_idx: '_fecha'
-            })
-            if 2 not in data.columns: data[2] = ''
-            if 3 not in data.columns: data[3] = ''
-            if 5 not in data.columns: data[5] = ''
-            if 6 not in data.columns: data[6] = ''
-            data[2] = data.get('_qty', data[2])
-            data[3] = data.get('_desc', data[3])
-            data[5] = data.get('_lote', data[5])
-            data[6] = data.get('_fecha', data[6])
+            rename_map = {}
+            for std_pos, src_pos in col_map_reorder.items():
+                if src_pos in data.columns and src_pos != std_pos:
+                    rename_map[src_pos] = f'_col{std_pos}'
+            data = data.rename(columns=rename_map)
+            for std_pos, src_pos in col_map_reorder.items():
+                key = f'_col{std_pos}'
+                if key in data.columns:
+                    data[std_pos] = data[key]
+                elif std_pos not in data.columns:
+                    data[std_pos] = ''
 
         rows.append(data)
     pl = pd.concat(rows, ignore_index=True) if rows else pd.DataFrame()
