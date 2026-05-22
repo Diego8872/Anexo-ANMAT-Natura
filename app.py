@@ -828,40 +828,76 @@ def parsear_msg(file_bytes):
         return None, f"No se pudo leer el archivo .msg: {e}"
 
     primer_bloque = re.split(r'_{3,}', body)[0]
-    lineas = [l.strip() for l in primer_bloque.replace('\r\n', '\n').split('\n')]
+    lineas = [l.strip() for l in primer_bloque.replace('\r\n', '\n').replace('\r', '\n').split('\n')]
 
+    # ── Formato A: Código del artículo / NCM / Sí o No ──
     inicio = None
     for i, l in enumerate(lineas):
         if 'código del artículo' in l.lower() or 'codigo del articulo' in l.lower():
             inicio = i + 1
             break
 
-    if inicio is None:
-        return None, "No se encontró la tabla Código / NCM / ANMAT en el mail."
+    if inicio is not None:
+        cols_ignorar = {'ncm', 'anmat', 'código del artículo', 'codigo del articulo', ''}
+        tokens = [l for l in lineas[inicio:] if l.lower() not in cols_ignorar]
+        items = []
+        i = 0
+        while i + 2 < len(tokens):
+            codigo = tokens[i].strip()
+            ncm    = tokens[i+1].strip()
+            anmat_val = tokens[i+2].strip().lower()
+            if anmat_val in ('si', 'sí', 'no') and re.match(r'^\d{4,}', ncm):
+                items.append({'codigo': codigo, 'ncm': ncm, 'anmat': anmat_val in ('si', 'sí')})
+                i += 3
+            else:
+                i += 1
+        if items:
+            return items, None
 
-    cols_ignorar = {'ncm', 'anmat', 'código del artículo', 'codigo del articulo', ''}
-    tokens = [l for l in lineas[inicio:] if l.lower() not in cols_ignorar]
+    # ── Formato B: Material / Descripción / NCM / Observ. (ANMAT o -) ──
+    inicio_b = None
+    for i, l in enumerate(lineas):
+        if l.lower() in ('material', 'código', 'codigo') and i + 1 < len(lineas):
+            # Verificar que las próximas líneas parezcan headers de tabla
+            siguientes = [lineas[j].lower() for j in range(i+1, min(i+5, len(lineas))) if lineas[j].strip()]
+            if any(k in siguientes for k in ['descripción', 'descripcion', 'ncm', 'observ.', 'observaciones']):
+                inicio_b = i + 1
+                break
 
-    items = []
-    i = 0
-    while i + 2 < len(tokens):
-        codigo = tokens[i].strip()
-        ncm    = tokens[i+1].strip()
-        anmat_val = tokens[i+2].strip().lower()
-        if anmat_val in ('si', 'sí', 'no') and re.match(r'^\d{4,}', ncm):
-            items.append({
-                'codigo': codigo,
-                'ncm':    ncm,
-                'anmat':  anmat_val in ('si', 'sí')
-            })
-            i += 3
-        else:
-            i += 1
+    if inicio_b is not None:
+        # Saltar líneas de header (descripción, ncm, observ.)
+        headers_b = {'descripción', 'descripcion', 'ncm', 'observ.', 'observaciones', ''}
+        tokens_b = [l for l in lineas[inicio_b:] if l.lower() not in headers_b]
+        items = []
+        i = 0
+        while i < len(tokens_b):
+            codigo = tokens_b[i].strip()
+            # Código debe ser numérico o alfanumérico con guión
+            if not re.match(r'^\d{5,}|^\d+-\d+', codigo):
+                i += 1
+                continue
+            # Buscar NCM en las próximas líneas (saltando descripción)
+            ncm = None
+            observ = None
+            for j in range(i+1, min(i+5, len(tokens_b))):
+                val = tokens_b[j].strip()
+                if re.match(r'^\d{4}\.\d{2}', val):
+                    ncm = val
+                    # Observación es la siguiente línea no vacía
+                    if j+1 < len(tokens_b):
+                        observ = tokens_b[j+1].strip()
+                    i = j + 2
+                    break
+            else:
+                i += 1
+                continue
+            if ncm:
+                es_anmat = observ is not None and 'anmat' in observ.lower()
+                items.append({'codigo': codigo, 'ncm': ncm, 'anmat': es_anmat})
+        if items:
+            return items, None
 
-    if not items:
-        return None, "La tabla del mail no tiene el formato esperado (Código / NCM / Sí o No)."
-
-    return items, None
+    return None, "No se encontró la tabla Código / NCM / ANMAT en el mail."
 
 
 def cargar_pl_muestras(file_bytes):
