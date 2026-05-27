@@ -1476,11 +1476,15 @@ if modo == "Muestras Natura":
         st.markdown('</div>', unsafe_allow_html=True)
 
 # ═══════════════════════════════════════════════════════════
-# RAMA B: OPERACIÓN NORMAL
+# RAMA B: OPERACIÓN NORMAL + FIABILA
 # ═══════════════════════════════════════════════════════════
-else:
+elif modo in ("Operación normal", "Fiabila"):
 
     st.markdown('<div class="card"><h3><span class="step-badge">1</span>Archivos de la operación</h3>', unsafe_allow_html=True)
+
+    if modo == "Fiabila":
+        st.markdown('<div class="modo-muestras" style="border-color:#9b59b6;background:linear-gradient(135deg,#f5eef8,#e8daef);margin-bottom:12px;">🧪 Modo Fiabila — lote y vencimiento se extraen de los COA. El PL debe tener solapas Invoice + PL.</div>', unsafe_allow_html=True)
+
     st.markdown("**📌 Número de referencia de la operación**")
     nro_referencia = st.text_input("", placeholder="ej: 4550595912", label_visibility="collapsed")
 
@@ -1502,9 +1506,19 @@ else:
         f_avon  = st.file_uploader("🌸 Registros Avon",               type=['xlsx'],        key='avon')
         f_fab   = st.file_uploader("🏭 Fabricantes",                   type=['xls','xlsx'],  key='fab')
         f_ncm   = st.file_uploader("📊 Catálogo NCM",                  type=['xlsx'],        key='ncm')
+
+    # COAs solo para Fiabila
+    f_coas = []
+    if modo == "Fiabila":
+        f_coas = st.file_uploader("📄 COA(s) PDF — subí todos los de la operación",
+                                   type=['pdf'], accept_multiple_files=True, key='coas_fiabila')
+
     st.markdown('</div>', unsafe_allow_html=True)
 
-    archivos_ok = all([f_pl, f_prox, f_anmat, f_avon, f_fab, f_ncm])
+    archivos_ok = all([f_pl, f_anmat, f_avon, f_fab, f_ncm]) and (
+        (modo == "Operación normal" and f_prox) or
+        (modo == "Fiabila" and len(f_coas) > 0)
+    )
 
     if archivos_ok:
         st.markdown('<div class="card"><h3><span class="step-badge">2</span>Procesar operación</h3>', unsafe_allow_html=True)
@@ -1512,49 +1526,88 @@ else:
             with st.spinner('Procesando...'):
                 try:
                     suffix_fab = '.xls' if f_fab.name.endswith('.xls') else '.xlsx'
-                    pl, invoice        = cargar_pl(f_pl.read())
-
-                    anmat_bytes = f_anmat.read()
-                    avon_bytes  = f_avon.read()
-                    fab_bytes   = f_fab.read()
-                    ncm_bytes   = f_ncm.read()
-
-                    df_prox, es_pdf_prox, origen_explicito_prox, origen_proveedor_prox = cargar_proximas(f_prox.read(), f_prox.name)
-                    if es_pdf_prox and not origen_explicito_prox and origen_proveedor_prox:
-                        st.session_state.alerta_origen_proveedor = origen_proveedor_prox
-                    else:
-                        st.session_state.alerta_origen_proveedor = None
-
-                    df_anmat = cargar_anmat(anmat_bytes)
+                    avon_bytes = f_avon.read()
+                    fab_bytes  = f_fab.read()
+                    ncm_bytes  = f_ncm.read()
                     df_avon  = cargar_avon(avon_bytes)
                     df_fab   = cargar_fabricantes(fab_bytes, suffix=suffix_fab)
                     df_ncm   = cargar_ncm(ncm_bytes)
 
-                    # Guardar en session state para búsqueda de equivalentes
-                    st.session_state._df_anmat_cache = df_anmat
-                    st.session_state._df_avon_cache  = df_avon
-                    st.session_state._df_fab_cache   = df_fab
-                    st.session_state._df_ncm_cache   = df_ncm
+                    if modo == "Fiabila":
+                        # ── Modo Fiabila ──
+                        # Parsear COAs
+                        coas_data = []
+                        coa_errores = []
+                        for coa_file in f_coas:
+                            datos, err = parsear_coa_pdf(coa_file.read())
+                            if err:
+                                coa_errores.append(f"⚠️ {coa_file.name}: {err}")
+                            else:
+                                datos['archivo'] = coa_file.name
+                                coas_data.append(datos)
 
-                    filas, alertas_excluir, alertas_avon, alertas_generales = procesar_pl(
-                        pl, df_anmat, df_avon, df_prox, df_fab, df_ncm
-                    )
+                        # Cargar PL Fiabila (Invoice + PL solapas)
+                        invoice_rows, pl_rows, invoice_number = cargar_pl_fiabila(f_pl.read())
 
-                    st.session_state.filas_procesadas       = filas
-                    st.session_state.alertas_excluir        = alertas_excluir
-                    st.session_state.alertas_avon           = alertas_avon
-                    st.session_state.alertas_generales      = alertas_generales
-                    st.session_state.invoice                = invoice
-                    st.session_state.excluidos              = set()
-                    st.session_state.datos_avon_completados = {}
-                    st.session_state.df_avon_editable       = None
-                    st.session_state._avon_init_invoice     = None
-                    st.session_state.equivalentes           = {}
-                    st.session_state.rotulado_activo        = False
-                    st.session_state.materiales_rotulado    = []
+                        # Procesar
+                        filas, alertas_generales = procesar_fiabila(
+                            invoice_rows, pl_rows, coas_data, df_avon, df_fab, df_ncm
+                        )
+                        alertas_generales = alertas_generales + coa_errores
+
+                        st.session_state.filas_procesadas       = filas
+                        st.session_state.alertas_excluir        = []
+                        st.session_state.alertas_avon           = []
+                        st.session_state.alertas_generales      = alertas_generales
+                        st.session_state.invoice                = invoice_number
+                        st.session_state.excluidos              = set()
+                        st.session_state.datos_avon_completados = {}
+                        st.session_state.df_avon_editable       = None
+                        st.session_state._avon_init_invoice     = None
+                        st.session_state.equivalentes           = {}
+                        st.session_state.rotulado_activo        = False
+                        st.session_state.materiales_rotulado    = []
+                        st.session_state.fiabila_coas           = coas_data
+
+                    else:
+                        # ── Modo Normal ──
+                        anmat_bytes = f_anmat.read()
+                        df_anmat = cargar_anmat(anmat_bytes)
+                        df_prox, es_pdf_prox, origen_explicito_prox, origen_proveedor_prox = cargar_proximas(f_prox.read(), f_prox.name)
+                        if es_pdf_prox and not origen_explicito_prox and origen_proveedor_prox:
+                            st.session_state.alerta_origen_proveedor = origen_proveedor_prox
+                        else:
+                            st.session_state.alerta_origen_proveedor = None
+
+                        pl, invoice = cargar_pl(f_pl.read())
+
+                        st.session_state._df_anmat_cache = df_anmat
+                        st.session_state._df_avon_cache  = df_avon
+                        st.session_state._df_fab_cache   = df_fab
+                        st.session_state._df_ncm_cache   = df_ncm
+
+                        filas, alertas_excluir, alertas_avon, alertas_generales = procesar_pl(
+                            pl, df_anmat, df_avon, df_prox, df_fab, df_ncm
+                        )
+
+                        st.session_state.filas_procesadas       = filas
+                        st.session_state.alertas_excluir        = alertas_excluir
+                        st.session_state.alertas_avon           = alertas_avon
+                        st.session_state.alertas_generales      = alertas_generales
+                        st.session_state.invoice                = invoice
+                        st.session_state.excluidos              = set()
+                        st.session_state.datos_avon_completados = {}
+                        st.session_state.df_avon_editable       = None
+                        st.session_state._avon_init_invoice     = None
+                        st.session_state.equivalentes           = {}
+                        st.session_state.rotulado_activo        = False
+                        st.session_state.materiales_rotulado    = []
+                        st.session_state.fiabila_coas           = []
 
                 except Exception as e:
+                    import traceback
                     st.error(f"Error al procesar: {e}")
+                    st.text(traceback.format_exc())
         st.markdown('</div>', unsafe_allow_html=True)
 
     if st.session_state.filas_procesadas is not None:
@@ -1577,6 +1630,20 @@ else:
             st.markdown(f'<div class="stat-card"><div class="number" style="color:#ff6b6b">{skip}</div><div class="label">No encontrados</div></div>', unsafe_allow_html=True)
 
         st.markdown('<br>', unsafe_allow_html=True)
+
+        # ── Preview COAs procesados (solo Fiabila) ──
+        if modo == "Fiabila":
+            coas_f = st.session_state.get('fiabila_coas', [])
+            if coas_f:
+                with st.expander(f"📄 COAs procesados ({len(coas_f)})"):
+                    for c in coas_f:
+                        st.markdown(
+                            f'<div class="info-box"><strong>{c.get("archivo","")}</strong> → '
+                            f'Batch: <strong>{c.get("batch","")}</strong> | '
+                            f'Customer Code: <strong>{c.get("customer_code","")}</strong> | '
+                            f'Vence: <strong>{c.get("expired","")}</strong></div>',
+                            unsafe_allow_html=True
+                        )
 
         # ── Alerta origen proveedor (PDF sin origen explícito) ──
         if st.session_state.get('alerta_origen_proveedor'):
@@ -2212,122 +2279,3 @@ def procesar_fiabila(invoice_rows, pl_rows, coas, df_avon, df_fab, df_ncm):
                 })
 
     return filas, alertas
-
-
-# ═══════════════════════════════════════════════════════════
-# RAMA C: FIABILA
-# ═══════════════════════════════════════════════════════════
-if modo == "Fiabila":
-
-    st.markdown('<div class="modo-muestras" style="border-color:#9b59b6;background:linear-gradient(135deg,#f5eef8,#e8daef);">🧪 Modo Fiabila — lote y vencimiento se extraen de los COA. Cruce por FI Code Local en Registros Avon.</div>', unsafe_allow_html=True)
-
-    st.markdown('<div class="card"><h3><span class="step-badge">1</span>Archivos de la operación</h3>', unsafe_allow_html=True)
-    st.markdown("**📌 Número de referencia de la operación**")
-    nro_ref_f = st.text_input("", placeholder="ej: 26.05.0008", label_visibility="collapsed", key='nro_ref_fiabila')
-
-    col1, col2 = st.columns(2)
-    with col1:
-        f_pl_f   = st.file_uploader("📦 Invoice + PL Fiabila (.xlsx)", type=['xlsx'], key='pl_fiabila')
-        f_avon_f = st.file_uploader("🌸 Registros Avon", type=['xlsx'], key='avon_fiabila')
-        f_fab_f  = st.file_uploader("🏭 Fabricantes", type=['xls','xlsx'], key='fab_fiabila')
-    with col2:
-        f_ncm_f  = st.file_uploader("📊 Catálogo NCM", type=['xlsx'], key='ncm_fiabila')
-        f_coas   = st.file_uploader("📄 COA(s) PDF — subí todos los de la operación", type=['pdf'],
-                                     accept_multiple_files=True, key='coas_fiabila')
-    st.markdown('</div>', unsafe_allow_html=True)
-
-    archivos_ok_f = all([f_pl_f, f_avon_f, f_fab_f, f_ncm_f]) and len(f_coas) > 0
-
-    if archivos_ok_f:
-        st.markdown('<div class="card"><h3><span class="step-badge">2</span>Procesar</h3>', unsafe_allow_html=True)
-        if st.button("⚙️ Analizar y procesar", key='btn_procesar_fiabila'):
-            with st.spinner('Procesando...'):
-                try:
-                    # Cargar bases
-                    suffix_fab_f = '.xls' if f_fab_f.name.endswith('.xls') else '.xlsx'
-                    df_avon_f  = cargar_avon(f_avon_f.read())
-                    df_fab_f_  = cargar_fabricantes(f_fab_f.read(), suffix=suffix_fab_f)
-                    df_ncm_f_  = cargar_ncm(f_ncm_f.read())
-
-                    # Parsear COAs
-                    coas_data = []
-                    coa_errores = []
-                    for coa_file in f_coas:
-                        datos, err = parsear_coa_pdf(coa_file.read())
-                        if err:
-                            coa_errores.append(f"⚠️ {coa_file.name}: {err}")
-                        else:
-                            datos['archivo'] = coa_file.name
-                            coas_data.append(datos)
-
-                    # Cargar PL Fiabila
-                    invoice_rows, pl_rows, invoice_number = cargar_pl_fiabila(f_pl_f.read())
-
-                    # Procesar
-                    filas_f, alertas_f = procesar_fiabila(
-                        invoice_rows, pl_rows, coas_data,
-                        df_avon_f, df_fab_f_, df_ncm_f_
-                    )
-
-                    st.session_state['fiabila_filas']    = filas_f
-                    st.session_state['fiabila_alertas']  = alertas_f + coa_errores
-                    st.session_state['fiabila_invoice']  = invoice_number
-                    st.session_state['fiabila_coas']     = coas_data
-
-                except Exception as e:
-                    import traceback
-                    st.error(f"Error al procesar: {e}")
-                    st.text(traceback.format_exc())
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    if st.session_state.get('fiabila_filas') is not None:
-        filas_f   = st.session_state['fiabila_filas']
-        alertas_f = st.session_state['fiabila_alertas']
-        invoice_f = st.session_state['fiabila_invoice']
-        coas_f    = st.session_state['fiabila_coas']
-
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.markdown(f'<div class="stat-card"><div class="number">{len(filas_f)}</div><div class="label">Ítems en Anexo</div></div>', unsafe_allow_html=True)
-        with col2:
-            st.markdown(f'<div class="stat-card"><div class="number" style="color:#9b59b6">{len(coas_f)}</div><div class="label">COAs procesados</div></div>', unsafe_allow_html=True)
-        with col3:
-            st.markdown(f'<div class="stat-card"><div class="number" style="color:#ff6b6b">{len(alertas_f)}</div><div class="label">Alertas</div></div>', unsafe_allow_html=True)
-
-        st.markdown('<br>', unsafe_allow_html=True)
-
-        # Mostrar COAs parseados
-        if coas_f:
-            with st.expander(f"📄 COAs procesados ({len(coas_f)})"):
-                for c in coas_f:
-                    st.markdown(f'<div class="info-box"><strong>{c.get("archivo","")}</strong> → '
-                                f'Batch: <strong>{c.get("batch","")}</strong> | '
-                                f'Customer Code: <strong>{c.get("customer_code","")}</strong> | '
-                                f'Vence: <strong>{c.get("expired","")}</strong></div>',
-                                unsafe_allow_html=True)
-
-        if alertas_f:
-            st.markdown('<div class="card"><h3>⚠️ Alertas</h3>', unsafe_allow_html=True)
-            for a in alertas_f:
-                st.markdown(f'<div class="alert-box">{a}</div>', unsafe_allow_html=True)
-            st.markdown('</div>', unsafe_allow_html=True)
-
-        with st.expander("👁️ Vista previa del Anexo"):
-            cols_p = ['MATERIAL','Marca y Nombre del producto','Cantidad','Lote','Fecha de vencimiento','Posición Arancelaria']
-            st.dataframe(pd.DataFrame([{c: f.get(c,'') for c in cols_p} for f in filas_f]), use_container_width=True)
-
-        st.markdown('<div class="card"><h3><span class="step-badge">3</span>Generar Anexo</h3>', unsafe_allow_html=True)
-        if st.button("📄 Generar Anexo Fiabila", key='btn_generar_fiabila'):
-            with st.spinner('Generando archivos...'):
-                ref_f = nro_ref_f.strip() if nro_ref_f.strip() else (invoice_f or 'FIABILA')
-                zip_bytes_f = generar_zip([('FIABILA', filas_f)], ref_f, col_cantidad_header='Cantidad en KG')
-                st.markdown('<div class="success-box">✅ Anexo Fiabila generado correctamente</div>', unsafe_allow_html=True)
-                st.markdown(f"**FIABILA**: {len(filas_f)} ítems")
-                st.download_button(
-                    label="⬇️ Descargar Anexo Fiabila (ZIP)",
-                    data=zip_bytes_f,
-                    file_name=f"ANEXO_FIABILA_{ref_f}.zip",
-                    mime="application/zip",
-                    key='dl_zip_fiabila'
-                )
-        st.markdown('</div>', unsafe_allow_html=True)
