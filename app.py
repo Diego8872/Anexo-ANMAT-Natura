@@ -449,22 +449,49 @@ def buscar_fabricante(origen_str, mat_code, df_fab):
     origen_limpio = limpiar_str(origen)
     match_norm = None
     match_parcial = None
+    match_row_norm = None
+    match_row_parcial = None
     for _, row in df_fab.iterrows():
         en_hist = str(row['En Historico']).strip()
         if not en_hist or en_hist == 'nan':
             continue
         en_hist_limpio = limpiar_str(en_hist)
         if origen == en_hist:
-            return row['Corresponde'], None
+            return row['Corresponde'], None, row
         if match_norm is None and origen_limpio == en_hist_limpio:
             match_norm = row['Corresponde']
+            match_row_norm = row
         if match_parcial is None and en_hist_limpio in origen_limpio:
             match_parcial = row['Corresponde']
+            match_row_parcial = row
     if match_norm:
-        return match_norm, None
+        return match_norm, None, match_row_norm
     if match_parcial:
-        return match_parcial, None
-    return None, f"Fabricante no encontrado para material {mat_code} (origen: {origen_str})"
+        return match_parcial, None, match_row_parcial
+    return None, f"Fabricante no encontrado para material {mat_code} (origen: {origen_str})", None
+
+
+def extraer_origen_de_fila_fab(fab_row):
+    """
+    Dado el row de Fabricantes que matcheó, extrae el país buscando en
+    'En Historico' y 'Corresponde'. Retorna (pais, lista_paises_encontrados).
+    """
+    if fab_row is None:
+        return None, []
+
+    textos = [
+        str(fab_row.get('En Historico', '')),
+        str(fab_row.get('Corresponde', '')),
+    ]
+    paises_encontrados = []
+    for texto in textos:
+        p = _extraer_pais_de_texto(texto)
+        if p and p not in paises_encontrados:
+            paises_encontrados.append(p)
+
+    if len(paises_encontrados) == 1:
+        return paises_encontrados[0], paises_encontrados
+    return None, paises_encontrados
 
 def buscar_ncm(mat_code, df_ncm):
     found = df_ncm[df_ncm['Artículo'] == str(mat_code)]
@@ -553,7 +580,7 @@ def buscar_equivalente_en_bases(cod_equiv, df_anmat, df_avon, df_prox, df_fab, d
             nombre = nombre + ' (REPUESTO)'
 
         origen_norm = normalizar_pais(origen).capitalize() if origen != 'nan' else ''
-        fab, _ = buscar_fabricante(origen, cod_equiv, df_fab)
+        fab, _, _fab_row = buscar_fabricante(origen, cod_equiv, df_fab)
         ncm, _ = buscar_ncm(cod_equiv, df_ncm)
 
         return {
@@ -648,7 +675,7 @@ def procesar_pl(pl, df_anmat, df_avon, df_prox, df_fab, df_ncm):
                 fila['_alertas'].append(alerta_origen)
                 alertas_generales.append(alerta_origen)
 
-            fab, alerta_fab = buscar_fabricante(origen, mat_code, df_fab)
+            fab, alerta_fab, _fab_row = buscar_fabricante(origen, mat_code, df_fab)
             if alerta_fab:
                 fila['_alertas'].append(alerta_fab)
                 alertas_generales.append(alerta_fab)
@@ -761,7 +788,7 @@ def procesar_pl(pl, df_anmat, df_avon, df_prox, df_fab, df_ncm):
                 fila['Origen'] = ''
                 fila['_necesita_completar'] = True
 
-                fab, alerta_fab = buscar_fabricante('', mat_code, df_fab)
+                fab, alerta_fab, _fab_row = buscar_fabricante('', mat_code, df_fab)
                 fila['Fabricante'] = fab if not alerta_fab else ''
 
                 avon_idx_actual = len(alertas_avon)
@@ -1561,8 +1588,8 @@ def procesar_fiabila(invoice_rows, pl_rows, coas, df_avon, df_fab, df_ncm):
         ])
         elaborador = _get_avon(avon_row, ['ELABORADOR (ORIGEN)', 'ELABORADOR'])
 
-        # Fabricante y NCM
-        fab, alerta_fab = buscar_fabricante(elaborador, cod, df_fab)
+        # Fabricante: para Fiabila buscar por keyword 'fiabila' en tabla si el match normal falla
+        fab, alerta_fab, fab_row = buscar_fabricante(elaborador, cod, df_fab)
         if alerta_fab:
             alertas.append(alerta_fab)
 
@@ -1570,15 +1597,22 @@ def procesar_fiabila(invoice_rows, pl_rows, coas, df_avon, df_fab, df_ncm):
         if alerta_ncm:
             alertas.append(alerta_ncm)
 
-        # Origen — extraer país del elaborador
+        # Origen — extraer país desde la fila de Fabricantes que matcheó
         origen = ''
-        if elaborador:
-            for pais_key, pais_val in PAIS_NORMALIZADO.items():
-                if pais_key in elaborador.lower():
-                    origen = pais_val
-                    break
-            if not origen:
-                origen = elaborador.split('/')[0].strip().split(' ')[0].strip()
+        alerta_origen_cod = None
+        if fab_row is not None:
+            pais, paises_encontrados = extraer_origen_de_fila_fab(fab_row)
+            if len(paises_encontrados) == 0:
+                alerta_origen_cod = f"⚠️ {cod} — no se encontró país de origen en Fabricantes. Completar manualmente."
+            elif len(paises_encontrados) > 1:
+                alerta_origen_cod = f"⚠️ {cod} — origen ambiguo: {', '.join(paises_encontrados)}. Indicar cuál corresponde."
+            else:
+                origen = pais
+        elif not alerta_fab:
+            alerta_origen_cod = f"⚠️ {cod} — fabricante no encontrado, no se puede determinar origen."
+
+        if alerta_origen_cod:
+            alertas.append(alerta_origen_cod)
 
         # Determinar lotes del PL
         pl_filas = pl_por_codigo.get(cod, [])
@@ -1610,9 +1644,12 @@ def procesar_fiabila(invoice_rows, pl_rows, coas, df_avon, df_fab, df_ncm):
                 'Origen': origen,
                 'Fabricante': fab or '',
                 'Posición Arancelaria': ncm or '',
-                '_alertas': [], '_skip': False, '_avon': False,
-                '_necesita_completar': False, '_vencimiento': None,
-                '_multi_registro': False, '_expanded': False,
+                '_alertas': [alerta_origen_cod] if alerta_origen_cod else [],
+                '_skip': False, '_avon': False,
+                '_necesita_completar': bool(alerta_origen_cod),
+                '_vencimiento': None, '_multi_registro': False, '_expanded': False,
+                '_origen_ambiguo': alerta_origen_cod is not None,
+                '_paises_encontrados': paises_encontrados if alerta_origen_cod else [],
             })
         else:
             # Múltiples lotes → una línea por lote con cantidad del PL
@@ -1622,7 +1659,6 @@ def procesar_fiabila(invoice_rows, pl_rows, coas, df_avon, df_fab, df_ncm):
                 expired = coa.get('expired', '')
                 if not expired:
                     alertas.append(f"⚠️ {cod} — no se encontró COA para batch {batch}")
-                # Sumar cantidades del PL para ese lote
                 cantidad_lote = sum(
                     r['cantidad'] for r in pl_filas
                     if r['batch'] == batch and r['cantidad'] is not None
@@ -1642,9 +1678,12 @@ def procesar_fiabila(invoice_rows, pl_rows, coas, df_avon, df_fab, df_ncm):
                     'Origen': origen,
                     'Fabricante': fab or '',
                     'Posición Arancelaria': ncm or '',
-                    '_alertas': [], '_skip': False, '_avon': False,
-                    '_necesita_completar': False, '_vencimiento': None,
-                    '_multi_registro': False, '_expanded': False,
+                    '_alertas': [alerta_origen_cod] if alerta_origen_cod else [],
+                    '_skip': False, '_avon': False,
+                    '_necesita_completar': bool(alerta_origen_cod),
+                    '_vencimiento': None, '_multi_registro': False, '_expanded': False,
+                    '_origen_ambiguo': alerta_origen_cod is not None,
+                    '_paises_encontrados': paises_encontrados if alerta_origen_cod else [],
                 })
 
     return filas, alertas
@@ -2155,6 +2194,45 @@ elif modo in ("Operación normal", "Fiabila"):
                 for a in st.session_state.alertas_generales:
                     st.markdown(f'<div class="alert-box">{a}</div>', unsafe_allow_html=True)
 
+        # ── Alertas de origen Fiabila (origen ambiguo o no encontrado) ──
+        if modo == "Fiabila":
+            filas_origen_alerta = [
+                f for f in st.session_state.filas_procesadas
+                if f.get('_origen_ambiguo')
+            ]
+            if filas_origen_alerta:
+                st.markdown('<div class="card"><h3>🌍 Origen a confirmar — Fiabila</h3>', unsafe_allow_html=True)
+                if 'fiabila_origenes' not in st.session_state:
+                    st.session_state.fiabila_origenes = {}
+                for fila in filas_origen_alerta:
+                    cod = fila['MATERIAL']
+                    paises = fila.get('_paises_encontrados', [])
+                    prev_origen = st.session_state.fiabila_origenes.get(cod, fila.get('Origen', ''))
+                    msg = fila['_alertas'][0] if fila.get('_alertas') else ''
+                    st.markdown(f'<div class="alert-box"><strong>{cod}</strong> — {msg}</div>', unsafe_allow_html=True)
+                    if paises:
+                        # Ambiguo: mostrar opciones
+                        opcion = st.selectbox(
+                            f"Seleccioná el origen para {cod}:",
+                            options=[''] + paises + ['Otro...'],
+                            index=0 if not prev_origen else (paises.index(prev_origen) + 1 if prev_origen in paises else len(paises) + 1),
+                            key=f'fiabila_origen_sel_{cod}'
+                        )
+                        if opcion == 'Otro...':
+                            opcion = st.text_input("Ingresá el origen:", key=f'fiabila_origen_txt_{cod}')
+                        if opcion:
+                            st.session_state.fiabila_origenes[cod] = opcion
+                    else:
+                        # No encontrado: campo libre
+                        origen_manual = st.text_input(
+                            f"Ingresá el origen para {cod}:",
+                            value=prev_origen,
+                            key=f'fiabila_origen_manual_{cod}'
+                        )
+                        if origen_manual:
+                            st.session_state.fiabila_origenes[cod] = origen_manual
+                st.markdown('</div>', unsafe_allow_html=True)
+
         # ══════════════════════════════════════════════════════
         # SECCIÓN: Rotulado — multiselect post-proceso si Sí
         # ══════════════════════════════════════════════════════
@@ -2238,6 +2316,11 @@ elif modo in ("Operación normal", "Fiabila"):
                         if datos.get('fabricante'): f['Fabricante'] = datos['fabricante']
                         if datos.get('origen'):     f['Origen']     = datos['origen']
                         if datos.get('variedad'):   f['Variedades'] = datos['variedad']
+                    # Aplicar origen Fiabila completado manualmente
+                    if modo == "Fiabila" and f.get('_origen_ambiguo'):
+                        origen_completado = st.session_state.get('fiabila_origenes', {}).get(mat, '')
+                        if origen_completado:
+                            f['Origen'] = origen_completado
                     filas_final.append(f)
 
                 principal, difusor, muestras, _ = separar_anexos(filas_final)
