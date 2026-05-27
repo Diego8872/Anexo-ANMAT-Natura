@@ -124,7 +124,9 @@ def cargar_pl(file_bytes):
             if ('MATERIAL CODE' in row_str or 'MATERIAL\nCODE' in str(row.values)
                     or ('CODE' in vals_upper and any(k in row_str for k in ['PRODUCT', 'LOT', 'DESCRIPTION', 'DESCRIPCION', 'PACKING']))
                     or ('CODIGO' in row_str and any(k in row_str for k in ['DESCRIPCION', 'LOTE', 'CANTIDAD']))
-                    or ('MATERIAL' in vals_upper and any(k in row_str for k in ['DESCRIPTION', 'LOT', 'QUANTITY']))):
+                    or ('MATERIAL' in vals_upper and any(k in row_str for k in ['DESCRIPTION', 'LOT', 'QUANTITY']))
+                    or ('CUSTOMER CODE' in row_str and any(k in row_str for k in ['DESCRIPTION', 'BATCH', 'PURCHASE']))
+                    or ('CÓDIGO FIABILA' in row_str or 'CODIGO FIABILA' in row_str)):
                 header_row = i
                 break
         if header_row is None:
@@ -164,27 +166,29 @@ def cargar_pl(file_bytes):
         data = df.iloc[data_start:].copy().reset_index(drop=True)
         data.columns = range(len(data.columns))
 
-        # Detectar columna de material: primero por header, luego por contenido numérico
+        # Detectar columna de material: primero por header, luego por contenido
         col_mat = None
         for idx, h in enumerate(header_vals):
-            if h in ('CODE', 'CÓDIGO', 'CODIGO', 'MATERIAL CODE', 'MATERIAL CODE'):
+            if h in ('CODE', 'CÓDIGO', 'CODIGO', 'MATERIAL CODE', 'CUSTOMER CODE'):
                 col_mat = idx
                 break
-            if 'MATERIAL CODE' in h or h == 'MATERIAL\nCODE':
+            if 'MATERIAL CODE' in h or h == 'MATERIAL\nCODE' or 'CUSTOMER CODE' in h:
                 col_mat = idx
                 break
 
         if col_mat is None:
-            # Fallback: primera columna con códigos numéricos de 5+ dígitos
+            # Fallback: primera columna con códigos numéricos 5+ dígitos o formato 1-XXXXX
             for col_idx in range(min(5, len(data.columns))):
                 muestra = data[col_idx].dropna().astype(str)
-                if muestra.str.match(r'^\d{5,}').sum() > 0:
+                if (muestra.str.match(r'^\d{5,}').sum() > 0 or
+                        muestra.str.match(r'^\d+-\d{4,}').sum() > 0):
                     col_mat = col_idx
                     break
             if col_mat is None:
                 col_mat = 1
 
-        data = data[data[col_mat].astype(str).str.match(r'^\d{5,}$')]
+        # Filtro de material: numérico 5+ dígitos O formato 1-XXXXX
+        data = data[data[col_mat].astype(str).str.match(r'^\d{5,}$|^\d+-\d{4,}$')]
 
         # Detectar columnas clave por header
         col_qty_idx, col_desc_idx, col_lote_idx, col_fecha_idx = 2, 3, 5, 6
@@ -195,7 +199,7 @@ def cargar_pl(file_bytes):
             if idx in [0, 1]:
                 continue
             # Cantidad: QUANTITY PC / QUANTITY / CANTIDAD / PCS (excluir BOXES y TOTAL)
-            if not qty_encontrado and any(k in h for k in ['QUANTITY PC', 'QUANTITY', 'CANTIDAD', 'PCS']) and 'BOX' not in h and 'TOTAL' not in h:
+            if not qty_encontrado and any(k in h for k in ['QUANTITY PC', 'QUANTITY', 'CANTIDAD', 'PCS', 'TOTAL NET WEIGHT', 'NET WEIGHT']) and 'BOX' not in h and ('TOTAL' not in h or 'WEIGHT' in h):
                 col_qty_idx = idx
                 qty_encontrado = True
             # Descripción
@@ -205,7 +209,7 @@ def cargar_pl(file_bytes):
             if 'LOT PRODUCT' in h and not lote_encontrado:
                 col_lote_idx = idx
                 lote_encontrado = True
-            elif any(k in h for k in ['LOT NUMBER', 'LOT', 'LOTE']) and 'SUPPLIER' not in h and 'BOX' not in h and not lote_encontrado:
+            elif any(k in h for k in ['LOT NUMBER', 'LOT', 'LOTE', 'BATCH']) and 'SUPPLIER' not in h and 'BOX' not in h and not lote_encontrado:
                 col_lote_idx = idx
                 lote_encontrado = True
             # Fecha
@@ -1350,6 +1354,11 @@ defaults = {
     'invoice_muestras':        None,
     'alertas_muestras':        [],
     'col_cantidad_muestras':   'Cantidad',
+    # Fiabila
+    'fiabila_filas':           None,
+    'fiabila_alertas':         [],
+    'fiabila_invoice':         None,
+    'fiabila_coas':            [],
     # Equivalentes: dict {material: {'codigo': str, 'datos': dict|None, 'fuente': str|None, 'error': str|None}}
     'equivalentes':            {},
     # Rotulado
@@ -1369,7 +1378,7 @@ for k, v in defaults.items():
 st.markdown('<div class="card"><h3><span class="step-badge">0</span>Tipo de operación</h3>', unsafe_allow_html=True)
 modo = st.radio(
     "¿Qué tipo de operación es?",
-    options=["Operación normal", "Muestras Natura"],
+    options=["Operación normal", "Muestras Natura", "Fiabila"],
     horizontal=True,
     key='modo_radio'
 )
@@ -1890,5 +1899,435 @@ else:
                     file_name=f"ANEXO_{ref}.zip",
                     mime="application/zip",
                     key='dl_zip'
+                )
+        st.markdown('</div>', unsafe_allow_html=True)
+
+# ═══════════════════════════════════════════════════════════
+# FUNCIONES FIABILA
+# ═══════════════════════════════════════════════════════════
+
+def parsear_coa_pdf(file_bytes):
+    """
+    Extrae Batch, Expired date y Customer Code de un COA PDF de Fiabila.
+    Retorna dict: {'batch': str, 'expired': str (MM/YYYY), 'customer_code': str} o None
+    """
+    try:
+        import pdfplumber
+    except ImportError:
+        return None, "pdfplumber no disponible"
+
+    texto = ''
+    with pdfplumber.open(BytesIO(file_bytes)) as pdf:
+        for page in pdf.pages:
+            texto += (page.extract_text() or '') + '\n'
+
+    resultado = {}
+
+    # Batch
+    m = re.search(r'Batch\s*:\s*([^\s]+)', texto, re.IGNORECASE)
+    if m:
+        resultado['batch'] = m.group(1).strip()
+
+    # Expired date — formato "09 Apr 29" o "09 Apr 2029"
+    m = re.search(r'Expired\s+date\s*:\s*(\d{1,2}\s+\w{3}\s+\d{2,4})', texto, re.IGNORECASE)
+    if m:
+        fecha_str = m.group(1).strip()
+        try:
+            # Intentar parsear "09 Apr 29" o "09 Apr 2029"
+            for fmt in ('%d %b %y', '%d %b %Y'):
+                try:
+                    fecha = datetime.strptime(fecha_str, fmt)
+                    resultado['expired'] = f"{fecha.month:02d}/{fecha.year}"
+                    break
+                except:
+                    pass
+        except:
+            resultado['expired'] = fecha_str
+
+    # Customer Code — formato "Descripcion /1-XXXXX" en Customer Shade
+    m = re.search(r'Customer\s+Shade\s*:,?\s*(.+?)/(1-\d+)', texto, re.IGNORECASE)
+    if m:
+        resultado['customer_code'] = m.group(2).strip()
+        resultado['shade_desc'] = m.group(1).strip()
+    else:
+        # Fallback: buscar patrón 1-XXXXX en el texto
+        m = re.search(r'(1-\d{4,})', texto)
+        if m:
+            resultado['customer_code'] = m.group(1).strip()
+
+    if not resultado:
+        return None, "No se pudo extraer información del COA"
+
+    return resultado, None
+
+
+def cargar_pl_fiabila(file_bytes):
+    """
+    Lee el Excel de Fiabila (Invoice + PL).
+    Retorna:
+      - invoice_rows: dict {customer_code: cantidad_kg} desde hoja Invoice
+      - pl_rows: list de dicts {customer_code, descripcion, lote_batch, cantidad_kg}
+      - invoice_number: str
+    """
+    with tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False) as f:
+        f.write(file_bytes)
+        tmp = f.name
+
+    xl = pd.ExcelFile(tmp)
+    invoice_rows = {}
+    pl_rows = []
+    invoice_number = None
+
+    for sh in xl.sheet_names:
+        sh_upper = sh.upper()
+        df = pd.read_excel(tmp, sheet_name=sh, header=None)
+
+        # ── Extraer invoice number ──
+        if invoice_number is None:
+            for i in range(min(5, len(df))):
+                for v in df.iloc[i].values:
+                    s = str(v)
+                    m = re.search(r'invoice\s*(?:number)?[:\s]+([^\s]+)', s, re.IGNORECASE)
+                    if m:
+                        invoice_number = m.group(1).strip()
+                        break
+                if invoice_number:
+                    break
+
+        # ── Hoja Invoice: una línea por producto, cantidad total ──
+        if 'INVOICE' in sh_upper and 'PL' not in sh_upper:
+            # Buscar header
+            header_row = None
+            for i, row in df.iterrows():
+                row_str = ' '.join(str(v).upper() for v in row.values if pd.notna(v))
+                if 'CUSTOMER CODE' in row_str or 'CUSTOMER  CODE' in row_str:
+                    header_row = i
+                    break
+            if header_row is None:
+                continue
+            headers = [str(v).strip().upper() if pd.notna(v) else '' for v in df.iloc[header_row].values]
+
+            col_code = col_qty = col_desc = None
+            for idx, h in enumerate(headers):
+                if 'CUSTOMER CODE' in h and col_code is None:
+                    col_code = idx
+                if any(k in h for k in ['QUANTITY KG', 'QTY KG', 'QUANTITY', 'KG']) and 'GROSS' not in h and col_qty is None:
+                    col_qty = idx
+                if any(k in h for k in ['DESCRIPTION', 'DESCRIP']) and col_desc is None:
+                    col_desc = idx
+
+            if col_code is None:
+                continue
+
+            for i in range(header_row + 1, len(df)):
+                row = df.iloc[i]
+                cod = str(row.iloc[col_code]).strip() if pd.notna(row.iloc[col_code]) else ''
+                if not re.match(r'^\d+-\d+', cod):
+                    continue
+                qty = None
+                if col_qty is not None and pd.notna(row.iloc[col_qty]):
+                    try:
+                        qty = float(row.iloc[col_qty])
+                    except:
+                        pass
+                desc = str(row.iloc[col_desc]).strip() if col_desc and pd.notna(row.iloc[col_desc]) else ''
+                invoice_rows[cod] = {'cantidad': qty, 'descripcion': desc}
+
+        # ── Hoja PL: puede tener múltiples filas por producto (distintos lotes) ──
+        elif 'PL' in sh_upper:
+            header_row = None
+            for i, row in df.iterrows():
+                row_str = ' '.join(str(v).upper() for v in row.values if pd.notna(v))
+                if 'CUSTOMER CODE' in row_str or 'BATCH' in row_str:
+                    header_row = i
+                    break
+            if header_row is None:
+                continue
+            headers = [str(v).strip().upper() if pd.notna(v) else '' for v in df.iloc[header_row].values]
+
+            col_code = col_batch = col_desc = col_qty = None
+            for idx, h in enumerate(headers):
+                if 'CUSTOMER CODE' in h and col_code is None:
+                    col_code = idx
+                if 'BATCH' in h and col_batch is None:
+                    col_batch = idx
+                if any(k in h for k in ['DESCRIPTION', 'DESCRIP']) and col_desc is None:
+                    col_desc = idx
+                if any(k in h for k in ['TOTAL NET WEIGHT', 'NET WEIGHT']) and col_qty is None:
+                    col_qty = idx
+
+            if col_code is None:
+                continue
+
+            for i in range(header_row + 1, len(df)):
+                row = df.iloc[i]
+                cod = str(row.iloc[col_code]).strip() if pd.notna(row.iloc[col_code]) else ''
+                if not re.match(r'^\d+-\d+', cod):
+                    continue
+                batch = str(row.iloc[col_batch]).strip() if col_batch is not None and pd.notna(row.iloc[col_batch]) else ''
+                desc = str(row.iloc[col_desc]).strip() if col_desc is not None and pd.notna(row.iloc[col_desc]) else ''
+                qty = None
+                if col_qty is not None and pd.notna(row.iloc[col_qty]):
+                    try:
+                        qty = float(row.iloc[col_qty])
+                    except:
+                        pass
+                pl_rows.append({'customer_code': cod, 'batch': batch, 'descripcion': desc, 'cantidad': qty})
+
+    return invoice_rows, pl_rows, invoice_number
+
+
+def procesar_fiabila(invoice_rows, pl_rows, coas, df_avon, df_fab, df_ncm):
+    """
+    Cruza Invoice + PL + COAs + bases ANMAT/Avon para generar filas del Anexo.
+    Lógica de cantidad:
+      - Si un customer_code tiene un solo lote en el PL → usa cantidad de Invoice
+      - Si tiene múltiples lotes distintos → una línea por lote con cantidad del PL
+    """
+    filas = []
+    alertas = []
+
+    # Agrupar PL por customer_code → lotes
+    from collections import defaultdict
+    pl_por_codigo = defaultdict(list)
+    for row in pl_rows:
+        pl_por_codigo[row['customer_code']].append(row)
+
+    for cod, inv_data in invoice_rows.items():
+        avon_row = buscar_avon(cod, df_avon)
+        if avon_row is None:
+            alertas.append(f"⚠️ {cod} — no encontrado en Registros Avon")
+            continue
+
+        def _get_avon(row, variantes, default=''):
+            for v in variantes:
+                val = row.get(v)
+                if val is not None and str(val).strip() not in ('', 'nan'):
+                    return str(val).strip()
+            for k in row.index:
+                k_norm = str(k).strip().lower().replace(' ','').replace('/','').replace('\n','')
+                for v in variantes:
+                    v_norm = v.strip().lower().replace(' ','').replace('/','').replace('\n','')
+                    if k_norm == v_norm:
+                        s = str(row[k]).strip()
+                        if s and s != 'nan':
+                            return s
+            return default
+
+        nombre = _get_avon(avon_row, ['NOMBRE DE REGISTRO DE PRODUCTO', 'NOMBRE REGISTRO'])
+        contenido = _get_avon(avon_row, ['CONTENIDO LEGAL', 'CONTENIDO'])
+        registro = _get_avon(avon_row, [
+            'Reg. SP   (Trámite#)\nARGENTINA NATURA',
+            'Reg. SP   (Trámite#)\nNATURA ARG',
+            'Reg. SP (Trámite#)\nARGENTINA NATURA',
+            'Reg. SP   (Tramite#)\nARGENTINA NATURA',
+            'Reg. SP   (Trámite#)\nNATURA ARGENTINA',
+        ])
+        elaborador = _get_avon(avon_row, ['ELABORADOR (ORIGEN)', 'ELABORADOR'])
+
+        # Fabricante y NCM
+        fab, alerta_fab = buscar_fabricante(elaborador, cod, df_fab)
+        if alerta_fab:
+            alertas.append(alerta_fab)
+
+        ncm, alerta_ncm = buscar_ncm(cod, df_ncm)
+        if alerta_ncm:
+            alertas.append(alerta_ncm)
+
+        # Origen — extraer país del elaborador
+        origen = ''
+        if elaborador:
+            for pais_key, pais_val in PAIS_NORMALIZADO.items():
+                if pais_key in elaborador.lower():
+                    origen = pais_val
+                    break
+            if not origen:
+                origen = elaborador.split('/')[0].strip().split(' ')[0].strip()
+
+        # Determinar lotes del PL
+        pl_filas = pl_por_codigo.get(cod, [])
+        lotes_unicos = list({r['batch']: r for r in pl_filas}.values())
+
+        # Buscar COA para cada lote
+        coa_por_batch = {c['batch']: c for c in coas if 'batch' in c and c.get('customer_code') == cod}
+
+        if len(lotes_unicos) <= 1:
+            # Un solo lote → cantidad de Invoice
+            batch = lotes_unicos[0]['batch'] if lotes_unicos else ''
+            coa = coa_por_batch.get(batch, {})
+            expired = coa.get('expired', '')
+            if not expired:
+                alertas.append(f"⚠️ {cod} — no se encontró COA para batch {batch}")
+            cantidad = inv_data.get('cantidad', '')
+            desc = inv_data.get('descripcion', '') or (lotes_unicos[0]['descripcion'] if lotes_unicos else '')
+
+            filas.append({
+                'MATERIAL': cod,
+                'descripcion_factura': desc,
+                'Marca y Nombre del producto': nombre,
+                'Variedades': '',
+                'Presentación': contenido,
+                'Cantidad': cantidad,
+                'N° de inscripcion': registro,
+                'Lote': batch,
+                'Fecha de vencimiento': expired,
+                'Origen': origen,
+                'Fabricante': fab or '',
+                'Posición Arancelaria': ncm or '',
+                '_alertas': [], '_skip': False, '_avon': False,
+                '_necesita_completar': False, '_vencimiento': None,
+                '_multi_registro': False, '_expanded': False,
+            })
+        else:
+            # Múltiples lotes → una línea por lote con cantidad del PL
+            for lote_row in lotes_unicos:
+                batch = lote_row['batch']
+                coa = coa_por_batch.get(batch, {})
+                expired = coa.get('expired', '')
+                if not expired:
+                    alertas.append(f"⚠️ {cod} — no se encontró COA para batch {batch}")
+                # Sumar cantidades del PL para ese lote
+                cantidad_lote = sum(
+                    r['cantidad'] for r in pl_filas
+                    if r['batch'] == batch and r['cantidad'] is not None
+                )
+                desc = inv_data.get('descripcion', '') or lote_row['descripcion']
+
+                filas.append({
+                    'MATERIAL': cod,
+                    'descripcion_factura': desc,
+                    'Marca y Nombre del producto': nombre,
+                    'Variedades': '',
+                    'Presentación': contenido,
+                    'Cantidad': cantidad_lote if cantidad_lote else '',
+                    'N° de inscripcion': registro,
+                    'Lote': batch,
+                    'Fecha de vencimiento': expired,
+                    'Origen': origen,
+                    'Fabricante': fab or '',
+                    'Posición Arancelaria': ncm or '',
+                    '_alertas': [], '_skip': False, '_avon': False,
+                    '_necesita_completar': False, '_vencimiento': None,
+                    '_multi_registro': False, '_expanded': False,
+                })
+
+    return filas, alertas
+
+
+# ═══════════════════════════════════════════════════════════
+# RAMA C: FIABILA
+# ═══════════════════════════════════════════════════════════
+if modo == "Fiabila":
+
+    st.markdown('<div class="modo-muestras" style="border-color:#9b59b6;background:linear-gradient(135deg,#f5eef8,#e8daef);">🧪 Modo Fiabila — lote y vencimiento se extraen de los COA. Cruce por FI Code Local en Registros Avon.</div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="card"><h3><span class="step-badge">1</span>Archivos de la operación</h3>', unsafe_allow_html=True)
+    st.markdown("**📌 Número de referencia de la operación**")
+    nro_ref_f = st.text_input("", placeholder="ej: 26.05.0008", label_visibility="collapsed", key='nro_ref_fiabila')
+
+    col1, col2 = st.columns(2)
+    with col1:
+        f_pl_f   = st.file_uploader("📦 Invoice + PL Fiabila (.xlsx)", type=['xlsx'], key='pl_fiabila')
+        f_avon_f = st.file_uploader("🌸 Registros Avon", type=['xlsx'], key='avon_fiabila')
+        f_fab_f  = st.file_uploader("🏭 Fabricantes", type=['xls','xlsx'], key='fab_fiabila')
+    with col2:
+        f_ncm_f  = st.file_uploader("📊 Catálogo NCM", type=['xlsx'], key='ncm_fiabila')
+        f_coas   = st.file_uploader("📄 COA(s) PDF — subí todos los de la operación", type=['pdf'],
+                                     accept_multiple_files=True, key='coas_fiabila')
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    archivos_ok_f = all([f_pl_f, f_avon_f, f_fab_f, f_ncm_f]) and len(f_coas) > 0
+
+    if archivos_ok_f:
+        st.markdown('<div class="card"><h3><span class="step-badge">2</span>Procesar</h3>', unsafe_allow_html=True)
+        if st.button("⚙️ Analizar y procesar", key='btn_procesar_fiabila'):
+            with st.spinner('Procesando...'):
+                try:
+                    # Cargar bases
+                    suffix_fab_f = '.xls' if f_fab_f.name.endswith('.xls') else '.xlsx'
+                    df_avon_f  = cargar_avon(f_avon_f.read())
+                    df_fab_f_  = cargar_fabricantes(f_fab_f.read(), suffix=suffix_fab_f)
+                    df_ncm_f_  = cargar_ncm(f_ncm_f.read())
+
+                    # Parsear COAs
+                    coas_data = []
+                    coa_errores = []
+                    for coa_file in f_coas:
+                        datos, err = parsear_coa_pdf(coa_file.read())
+                        if err:
+                            coa_errores.append(f"⚠️ {coa_file.name}: {err}")
+                        else:
+                            datos['archivo'] = coa_file.name
+                            coas_data.append(datos)
+
+                    # Cargar PL Fiabila
+                    invoice_rows, pl_rows, invoice_number = cargar_pl_fiabila(f_pl_f.read())
+
+                    # Procesar
+                    filas_f, alertas_f = procesar_fiabila(
+                        invoice_rows, pl_rows, coas_data,
+                        df_avon_f, df_fab_f_, df_ncm_f_
+                    )
+
+                    st.session_state['fiabila_filas']    = filas_f
+                    st.session_state['fiabila_alertas']  = alertas_f + coa_errores
+                    st.session_state['fiabila_invoice']  = invoice_number
+                    st.session_state['fiabila_coas']     = coas_data
+
+                except Exception as e:
+                    import traceback
+                    st.error(f"Error al procesar: {e}")
+                    st.text(traceback.format_exc())
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    if st.session_state.get('fiabila_filas') is not None:
+        filas_f   = st.session_state['fiabila_filas']
+        alertas_f = st.session_state['fiabila_alertas']
+        invoice_f = st.session_state['fiabila_invoice']
+        coas_f    = st.session_state['fiabila_coas']
+
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.markdown(f'<div class="stat-card"><div class="number">{len(filas_f)}</div><div class="label">Ítems en Anexo</div></div>', unsafe_allow_html=True)
+        with col2:
+            st.markdown(f'<div class="stat-card"><div class="number" style="color:#9b59b6">{len(coas_f)}</div><div class="label">COAs procesados</div></div>', unsafe_allow_html=True)
+        with col3:
+            st.markdown(f'<div class="stat-card"><div class="number" style="color:#ff6b6b">{len(alertas_f)}</div><div class="label">Alertas</div></div>', unsafe_allow_html=True)
+
+        st.markdown('<br>', unsafe_allow_html=True)
+
+        # Mostrar COAs parseados
+        if coas_f:
+            with st.expander(f"📄 COAs procesados ({len(coas_f)})"):
+                for c in coas_f:
+                    st.markdown(f'<div class="info-box"><strong>{c.get("archivo","")}</strong> → '
+                                f'Batch: <strong>{c.get("batch","")}</strong> | '
+                                f'Customer Code: <strong>{c.get("customer_code","")}</strong> | '
+                                f'Vence: <strong>{c.get("expired","")}</strong></div>',
+                                unsafe_allow_html=True)
+
+        if alertas_f:
+            st.markdown('<div class="card"><h3>⚠️ Alertas</h3>', unsafe_allow_html=True)
+            for a in alertas_f:
+                st.markdown(f'<div class="alert-box">{a}</div>', unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        with st.expander("👁️ Vista previa del Anexo"):
+            cols_p = ['MATERIAL','Marca y Nombre del producto','Cantidad','Lote','Fecha de vencimiento','Posición Arancelaria']
+            st.dataframe(pd.DataFrame([{c: f.get(c,'') for c in cols_p} for f in filas_f]), use_container_width=True)
+
+        st.markdown('<div class="card"><h3><span class="step-badge">3</span>Generar Anexo</h3>', unsafe_allow_html=True)
+        if st.button("📄 Generar Anexo Fiabila", key='btn_generar_fiabila'):
+            with st.spinner('Generando archivos...'):
+                ref_f = nro_ref_f.strip() if nro_ref_f.strip() else (invoice_f or 'FIABILA')
+                zip_bytes_f = generar_zip([('FIABILA', filas_f)], ref_f, col_cantidad_header='Cantidad en KG')
+                st.markdown('<div class="success-box">✅ Anexo Fiabila generado correctamente</div>', unsafe_allow_html=True)
+                st.markdown(f"**FIABILA**: {len(filas_f)} ítems")
+                st.download_button(
+                    label="⬇️ Descargar Anexo Fiabila (ZIP)",
+                    data=zip_bytes_f,
+                    file_name=f"ANEXO_FIABILA_{ref_f}.zip",
+                    mime="application/zip",
+                    key='dl_zip_fiabila'
                 )
         st.markdown('</div>', unsafe_allow_html=True)
