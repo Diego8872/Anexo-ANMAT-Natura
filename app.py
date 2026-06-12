@@ -83,6 +83,15 @@ def cargar_anmat(file_bytes):
         buf.seek(0)
         df = pd.read_excel(buf, sheet_name='HISTORICO', header=0)
     df['CM'] = df['CM'].astype(str).str.strip()
+    # Normalizar nombre de columna NOMBRE/DESCRIPCION
+    if 'NOMBRE' not in df.columns and 'DESCRIPCION' in df.columns:
+        df = df.rename(columns={'DESCRIPCION': 'NOMBRE'})
+    elif 'NOMBRE' not in df.columns:
+        # Buscar cualquier columna que parezca nombre/descripción
+        for col in df.columns:
+            if col.upper() in ('DESCRIPCION', 'DESCRIPTION', 'NOMBRE DEL PRODUCTO', 'PRODUCTO'):
+                df = df.rename(columns={col: 'NOMBRE'})
+                break
     return df
 
 @st.cache_data
