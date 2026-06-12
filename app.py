@@ -623,7 +623,26 @@ def procesar_pl(pl, df_anmat, df_avon, df_prox, df_fab, df_ncm):
 
     for _, pl_row in pl.iterrows():
         mat_code = str(pl_row[1]).strip()
-        cantidad = pl_row[2]
+        # Saltar filas sin código de material válido
+        if not re.match(r'^\d{5,}$|^\d+-\d{4,}$', mat_code):
+            continue
+
+        # Limpiar cantidad — puede venir como '5820 PC', '2800 PC', etc.
+        cantidad_raw = pl_row[2]
+        if pd.isna(cantidad_raw):
+            cantidad = ''
+        else:
+            cantidad_str = str(cantidad_raw).strip()
+            # Extraer solo la parte numérica
+            m_cant = re.match(r'^([\d,\.]+)', cantidad_str.replace(' ', ''))
+            if m_cant:
+                try:
+                    cantidad = int(float(m_cant.group(1).replace(',', '')))
+                except:
+                    cantidad = cantidad_str
+            else:
+                cantidad = cantidad_str
+
         descripcion_pl = str(pl_row[3]).strip() if pd.notna(pl_row[3]) else ''
         lot_product = str(pl_row[5]).strip() if pd.notna(pl_row[5]) else ''
         expire_date = str(pl_row[6]).strip() if pd.notna(pl_row[6]) else ''
