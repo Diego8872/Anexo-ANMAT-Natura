@@ -127,7 +127,12 @@ def cargar_pl(file_bytes):
         df = pd.read_excel(tmp, sheet_name=sh, header=None)
         header_row = None
         for i, row in df.iterrows():
-            row_str = ' '.join(str(v).replace('\n', ' ').upper() for v in row.values if pd.notna(v))
+            row_str_raw = ' '.join(str(v).replace('\n', ' ').upper() for v in row.values if pd.notna(v))
+            # Normalizar acentos para comparación robusta (CÓDIGO -> CODIGO, etc.)
+            row_str = ''.join(
+                c for c in unicodedata.normalize('NFD', row_str_raw)
+                if unicodedata.category(c) != 'Mn'
+            )
             vals_upper = [str(v).replace('\n', ' ').strip().upper() for v in row.values if pd.notna(v)]
             # Detectar fila de header por palabras clave conocidas
             if ('MATERIAL CODE' in row_str or 'MATERIAL\nCODE' in str(row.values)
@@ -135,7 +140,7 @@ def cargar_pl(file_bytes):
                     or ('CODIGO' in row_str and any(k in row_str for k in ['DESCRIPCION', 'LOTE', 'CANTIDAD']))
                     or ('MATERIAL' in vals_upper and any(k in row_str for k in ['DESCRIPTION', 'LOT', 'QUANTITY']))
                     or ('CUSTOMER CODE' in row_str and any(k in row_str for k in ['DESCRIPTION', 'BATCH', 'PURCHASE']))
-                    or ('CÓDIGO FIABILA' in row_str or 'CODIGO FIABILA' in row_str)):
+                    or ('CODIGO FIABILA' in row_str)):
                 header_row = i
                 break
         if header_row is None:
@@ -168,8 +173,11 @@ def cargar_pl(file_bytes):
             tiene_numeros = any(str(v).strip().isdigit() or (len(str(v).strip()) >= 5 and str(v).strip().replace('.','').isdigit()) for v in primera.values if pd.notna(v))
             if not tiene_numeros:
                 data_start += 1  # saltar subheader
-        # Leer headers para detectar columnas por nombre
-        header_vals = [str(v).replace('\n', ' ').strip().upper() if pd.notna(v) else ''
+        # Leer headers para detectar columnas por nombre (normalizando acentos)
+        def _sin_acentos(s):
+            return ''.join(c for c in unicodedata.normalize('NFD', s) if unicodedata.category(c) != 'Mn')
+
+        header_vals = [_sin_acentos(str(v).replace('\n', ' ').strip().upper()) if pd.notna(v) else ''
                        for v in df.iloc[header_row].values]
 
         data = df.iloc[data_start:].copy().reset_index(drop=True)
@@ -178,7 +186,7 @@ def cargar_pl(file_bytes):
         # Detectar columna de material: primero por header, luego por contenido
         col_mat = None
         for idx, h in enumerate(header_vals):
-            if h in ('CODE', 'CÓDIGO', 'CODIGO', 'MATERIAL CODE', 'CUSTOMER CODE'):
+            if h in ('CODE', 'CODIGO', 'MATERIAL CODE', 'CUSTOMER CODE'):
                 col_mat = idx
                 break
             if 'MATERIAL CODE' in h or h == 'MATERIAL\nCODE' or 'CUSTOMER CODE' in h:
@@ -201,18 +209,19 @@ def cargar_pl(file_bytes):
 
         # Detectar columnas clave por header
         col_qty_idx, col_desc_idx, col_lote_idx, col_fecha_idx = 2, 3, 5, 6
+        col_origen_idx = None
         lote_encontrado = False
         qty_encontrado = False
 
         for idx, h in enumerate(header_vals):
             if idx in [0, 1]:
                 continue
-            # Cantidad: QUANTITY PC / QUANTITY / CANTIDAD / PCS (excluir BOXES y TOTAL)
-            if not qty_encontrado and any(k in h for k in ['QUANTITY PC', 'QUANTITY', 'CANTIDAD', 'PCS', 'TOTAL NET WEIGHT', 'NET WEIGHT']) and 'BOX' not in h and ('TOTAL' not in h or 'WEIGHT' in h):
+            # Cantidad: QUANTITY PC / QUANTITY / CANTIDAD / PCS / TOTAL UNIDADES (excluir BOXES y TOTAL NET/GROSS)
+            if not qty_encontrado and any(k in h for k in ['QUANTITY PC', 'QUANTITY', 'CANTIDAD', 'PCS', 'TOTAL NET WEIGHT', 'NET WEIGHT', 'TOTAL UNIDADES', 'TOTAL UNIDAD']) and 'BOX' not in h and ('TOTAL' not in h or 'WEIGHT' in h or 'UNIDAD' in h):
                 col_qty_idx = idx
                 qty_encontrado = True
             # Descripción
-            if any(k in h for k in ['DESCRIPTION', 'DESCRIP', 'PRODUCT NAME']):
+            if any(k in h for k in ['DESCRIPTION', 'DESCRIP']):
                 col_desc_idx = idx
             # Lote
             if 'LOT PRODUCT' in h and not lote_encontrado:
@@ -224,6 +233,9 @@ def cargar_pl(file_bytes):
             # Fecha
             if any(k in h for k in ['EXPIRE', 'VENC', 'EXPIR', 'EXPIRATION']):
                 col_fecha_idx = idx
+            # Origen (PL en español puede traer país de origen directo)
+            if any(k in h for k in ['PAIS DE ORIGEN', 'PAÍS DE ORIGEN', 'COUNTRY OF ORIGIN']):
+                col_origen_idx = idx
 
         # Normalizar fechas datetime → MM/YYYY
         if col_fecha_idx in data.columns:
