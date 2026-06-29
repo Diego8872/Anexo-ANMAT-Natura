@@ -83,15 +83,28 @@ def cargar_anmat(file_bytes):
         buf.seek(0)
         df = pd.read_excel(buf, sheet_name='HISTORICO', header=0)
     df['CM'] = df['CM'].astype(str).str.strip()
-    # Normalizar nombre de columna NOMBRE/DESCRIPCION
-    if 'NOMBRE' not in df.columns and 'DESCRIPCION' in df.columns:
-        df = df.rename(columns={'DESCRIPCION': 'NOMBRE'})
-    elif 'NOMBRE' not in df.columns:
-        # Buscar cualquier columna que parezca nombre/descripción
-        for col in df.columns:
-            if col.upper() in ('DESCRIPCION', 'DESCRIPTION', 'NOMBRE DEL PRODUCTO', 'PRODUCTO'):
-                df = df.rename(columns={col: 'NOMBRE'})
-                break
+
+    # Normalizar nombres de columnas que pueden variar entre archivos
+    def _normalizar_col(df, col_estandar, variantes):
+        if col_estandar in df.columns:
+            return df
+        for v in variantes:
+            if v in df.columns:
+                return df.rename(columns={v: col_estandar})
+        # Búsqueda case-insensitive
+        cols_upper = {c.upper(): c for c in df.columns}
+        for v in variantes:
+            if v.upper() in cols_upper:
+                return df.rename(columns={cols_upper[v.upper()]: col_estandar})
+        return df
+
+    df = _normalizar_col(df, 'NOMBRE',
+                          ['DESCRIPCION', 'DESCRIPTION', 'NOMBRE DEL PRODUCTO', 'PRODUCTO'])
+    df = _normalizar_col(df, 'Variedad',
+                          ['VARIEDADES', 'Variedades', 'VARIEDAD'])
+    df = _normalizar_col(df, 'Registros ANMAT',
+                          ['Registro ANMAT', 'REGISTROS ANMAT', 'REGISTRO ANMAT', 'Registros', 'REGISTRO'])
+
     return df
 
 @st.cache_data
