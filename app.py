@@ -984,6 +984,54 @@ def parsear_msg(file_bytes):
     return None, "No se encontró la tabla Código / NCM / ANMAT en el mail."
 
 
+def cargar_clasificacion_excel(file_bytes):
+    """
+    Lee el Excel de clasificación ANMAT (alternativa al .msg).
+    Columnas esperadas: Material, Descripción, NCM, Observ.
+    Observ. dice 'ANMAT' si corresponde, o '-' / vacío si no.
+    Retorna: (items, error)
+    items: lista de dicts {'codigo': str, 'ncm': str, 'anmat': bool}
+    """
+    try:
+        with tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False) as f:
+            f.write(file_bytes)
+            tmp = f.name
+        df = pd.read_excel(tmp, header=0)
+    except Exception as e:
+        return None, f"No se pudo leer el archivo Excel: {e}"
+
+    # Normalizar nombres de columna (tolerante a variaciones)
+    col_map = {c.strip().lower(): c for c in df.columns}
+
+    def _buscar_col(variantes):
+        for v in variantes:
+            if v in col_map:
+                return col_map[v]
+        return None
+
+    col_material = _buscar_col(['material', 'código', 'codigo'])
+    col_ncm = _buscar_col(['ncm'])
+    col_observ = _buscar_col(['observ.', 'observ', 'observaciones', 'anmat'])
+
+    if col_material is None or col_ncm is None:
+        return None, "El Excel debe tener al menos las columnas Material y NCM."
+
+    items = []
+    for _, row in df.iterrows():
+        codigo = str(row[col_material]).strip() if pd.notna(row[col_material]) else ''
+        if not re.match(r'^\d{5,}|^\d+-\d+', codigo):
+            continue
+        ncm = str(row[col_ncm]).strip() if pd.notna(row[col_ncm]) else ''
+        observ = str(row[col_observ]).strip() if col_observ and pd.notna(row[col_observ]) else ''
+        es_anmat = 'anmat' in observ.lower()
+        items.append({'codigo': codigo, 'ncm': ncm, 'anmat': es_anmat})
+
+    if not items:
+        return None, "No se encontraron filas válidas en el Excel de clasificación."
+
+    return items, None
+
+
 def cargar_pl_muestras(file_bytes):
     with tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False) as f:
         f.write(file_bytes)
@@ -1804,7 +1852,7 @@ if modo == "Muestras Natura":
     with col1:
         f_pl_m = st.file_uploader("📦 Packing List / Invoice (.xlsx)", type=['xlsx'], key='pl_muestras')
     with col2:
-        f_msg  = st.file_uploader("📧 Mail de clasificación ANMAT (.msg)", type=['msg'], key='msg_muestras')
+        f_msg  = st.file_uploader("📧 Clasificación ANMAT (.msg ó .xlsx)", type=['msg', 'xlsx'], key='msg_muestras')
     st.markdown('</div>', unsafe_allow_html=True)
 
     if f_pl_m and f_msg:
@@ -1812,9 +1860,12 @@ if modo == "Muestras Natura":
         if st.button("⚙️ Analizar y procesar muestras", key='btn_procesar_muestras'):
             with st.spinner('Procesando...'):
                 try:
-                    items_mail, err_mail = parsear_msg(f_msg.read())
+                    if f_msg.name.lower().endswith('.xlsx'):
+                        items_mail, err_mail = cargar_clasificacion_excel(f_msg.read())
+                    else:
+                        items_mail, err_mail = parsear_msg(f_msg.read())
                     if err_mail:
-                        st.error(f"Error al leer el mail: {err_mail}")
+                        st.error(f"Error al leer la clasificación: {err_mail}")
                         st.stop()
 
                     items_pl, invoice_m = cargar_pl_muestras(f_pl_m.read())
