@@ -98,12 +98,23 @@ def cargar_anmat(file_bytes):
                 return df.rename(columns={cols_upper[v.upper()]: col_estandar})
         return df
 
-    df = _normalizar_col(df, 'NOMBRE',
-                          ['DESCRIPCION', 'DESCRIPTION', 'NOMBRE DEL PRODUCTO', 'PRODUCTO'])
-    df = _normalizar_col(df, 'Variedad',
-                          ['VARIEDADES', 'Variedades', 'VARIEDAD'])
-    df = _normalizar_col(df, 'Registros ANMAT',
-                          ['Registro ANMAT', 'REGISTROS ANMAT', 'REGISTRO ANMAT', 'Registros', 'REGISTRO'])
+    df = _normalizar_col(df, 'NOMBRE', [
+        'DESCRIPCION', 'DESCRIPTION', 'NOMBRE DEL PRODUCTO', 'PRODUCTO',
+        'NOMBRE DE REGISTRO DE PRODUCTO', 'NOMBRE REGISTRO DE PRODUCTO',
+    ])
+    df = _normalizar_col(df, 'Variedad', [
+        'VARIEDADES', 'Variedades', 'VARIEDAD',
+    ])
+    df = _normalizar_col(df, 'Registros ANMAT', [
+        'Registro ANMAT', 'REGISTROS ANMAT', 'REGISTRO ANMAT', 'Registros', 'REGISTRO',
+        'REGISTRO (TRAMITE #)', 'REGISTRO (TRÁMITE #)', 'TRAMITE', 'TRÁMITE',
+    ])
+    df = _normalizar_col(df, 'ORIGEN', [
+        'ORIGEN/ELABORADOR', 'ORIGEN / ELABORADOR', 'ELABORADOR', 'PAIS DE ORIGEN',
+    ])
+    df = _normalizar_col(df, 'Fecha Admision', [
+        'FECHA ADMISIÓN', 'FECHA ADMISION', 'FECHA DE ADMISION', 'FECHA DE ADMISIÓN',
+    ])
 
     return df
 
