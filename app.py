@@ -455,7 +455,16 @@ def cargar_proximas(file_bytes, filename=''):
                 if df[col].dropna().astype(str).str.match(r'^\d{5,}').any():
                     df = df.rename(columns={col: 'Material'})
                     break
-        df['Material'] = df['Material'].astype(str).str.strip()
+        def _limpiar_material(v):
+            if pd.isna(v):
+                return ''
+            s = str(v).strip()
+            # Si es float con .0 final (ej: '50374280.0'), quitar el decimal
+            if re.match(r'^\d+\.0$', s):
+                s = s[:-2]
+            return s
+
+        df['Material'] = df['Material'].apply(_limpiar_material)
         return df, False, True, None
 
 def buscar_anmat(mat_code, df_anmat):
