@@ -66,6 +66,17 @@ def limpiar_str(s):
     s = re.sub(r'\s+', ' ', s).strip()
     return s
 
+def _codigo_str(v):
+    """Convierte un código (material, registro, etc.) a string, evitando el
+    sufijo '.0' que aparece cuando Pandas fuerza una columna a float64
+    (por ejemplo, cuando hay celdas vacías/NaN mezcladas con números)."""
+    if pd.isna(v):
+        return ''
+    s = str(v).strip()
+    if re.match(r'^\d+\.0$', s):
+        s = s[:-2]
+    return s
+
 def normalizar_pais(origen_str):
     if pd.isna(origen_str):
         return ''
@@ -82,7 +93,7 @@ def cargar_anmat(file_bytes):
     except:
         buf.seek(0)
         df = pd.read_excel(buf, sheet_name='HISTORICO', header=0)
-    df['CM'] = df['CM'].astype(str).str.strip()
+    df['CM'] = df['CM'].apply(_codigo_str)
 
     # Normalizar nombres de columnas que pueden variar entre archivos
     def _normalizar_col(df, col_estandar, variantes):
@@ -137,7 +148,7 @@ def cargar_fabricantes(file_bytes, suffix='.xlsx'):
 def cargar_ncm(file_bytes):
     buf = BytesIO(file_bytes)
     df = pd.read_excel(buf, header=0)
-    df['Artículo'] = df['Artículo'].astype(str).str.strip()
+    df['Artículo'] = df['Artículo'].apply(_codigo_str)
     return df
 
 def cargar_pl(file_bytes):
@@ -455,16 +466,7 @@ def cargar_proximas(file_bytes, filename=''):
                 if df[col].dropna().astype(str).str.match(r'^\d{5,}').any():
                     df = df.rename(columns={col: 'Material'})
                     break
-        def _limpiar_material(v):
-            if pd.isna(v):
-                return ''
-            s = str(v).strip()
-            # Si es float con .0 final (ej: '50374280.0'), quitar el decimal
-            if re.match(r'^\d+\.0$', s):
-                s = s[:-2]
-            return s
-
-        df['Material'] = df['Material'].apply(_limpiar_material)
+        df['Material'] = df['Material'].apply(_codigo_str)
         return df, False, True, None
 
 def buscar_anmat(mat_code, df_anmat):
@@ -489,11 +491,11 @@ def buscar_avon(mat_code, df_avon):
     col_cm = _col_avon(df_avon, ['CM / ZPAC', 'CM/ZPAC', 'CM/ ZPAC', 'CM /ZPAC'])
     col_fi = _col_avon(df_avon, ['FI Code Local', 'FI Code', 'FICodeLocal'])
     if col_cm:
-        found = df_avon[df_avon[col_cm].astype(str).str.strip() == mat_str]
+        found = df_avon[df_avon[col_cm].apply(_codigo_str) == mat_str]
         if len(found) > 0:
             return found.iloc[0]
     if col_fi:
-        found = df_avon[df_avon[col_fi].astype(str).str.strip() == mat_str]
+        found = df_avon[df_avon[col_fi].apply(_codigo_str) == mat_str]
         if len(found) > 0:
             return found.iloc[0]
     return None
@@ -583,7 +585,7 @@ def separar_registros(registro_str):
 
 def buscar_por_registro(nro_registro, df_anmat):
     nro = str(nro_registro).strip()
-    found = df_anmat[df_anmat['Registros ANMAT'].astype(str).str.strip() == nro]
+    found = df_anmat[df_anmat['Registros ANMAT'].apply(_codigo_str) == nro]
     if len(found) == 0:
         return None, "NOT_FOUND"
     if len(found) == 1:
